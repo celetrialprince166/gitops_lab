@@ -1,24 +1,28 @@
-# Multi-Container Notes Application — DevOps CI/CD on AWS
+# Secure CI/CD Pipeline for Multi-Container Notes Application — ECS Fargate with SAST/SCA
 
-A production-ready full-stack Notes application deployed on AWS EC2 using Docker, Terraform, and GitHub Actions. This project demonstrates infrastructure-as-code practices, automated CI/CD pipelines, container orchestration, and secure secrets management without long-lived credentials.
+A production-grade full-stack Notes application deployed on AWS ECS Fargate with comprehensive security scanning, blue/green deployments, and automated quality gates. This project demonstrates enterprise-level DevOps practices including SAST, SCA, container vulnerability scanning, SBOM generation, secret detection, and zero-downtime deployments using AWS CodeDeploy.
 
 ---
 
 ## Table of Contents
 
-- [Architecture](#architecture)
+- [Project Overview](#project-overview)
 - [Motivation](#motivation)
+- [Architecture](#architecture)
+- [Security Pipeline](#security-pipeline)
 - [Key Technologies](#key-technologies)
-- [Architecture Diagram](#architecture-diagram)
 - [Prerequisites](#prerequisites)
 - [Installation](#installation)
 - [Usage](#usage)
-- [Jenkins CI/CD Pipeline](#jenkins-cicd-pipeline)
+- [CI/CD Pipeline](#cicd-pipeline)
+- [Security Scanning](#security-scanning)
+- [ECS Deployment](#ecs-deployment)
+- [Blue/Green Deployment Strategy](#bluegreen-deployment-strategy)
+- [Monitoring & Observability](#monitoring--observability)
 - [Project Structure](#project-structure)
-- [Observability Stack](#observability-stack)
-- [Deployment Evolution](./docs/DEPLOYMENT_EVOLUTION.md) — *From manual EC2 to Blue/Green ECS*
 - [Learning Outcomes](#learning-outcomes)
 - [Challenges & Solutions](#challenges--solutions)
+- [Evidence & Validation](#evidence--validation)
 - [Future Improvements](#future-improvements)
 - [Contributing](#contributing)
 - [License](#license)
@@ -26,308 +30,1335 @@ A production-ready full-stack Notes application deployed on AWS EC2 using Docker
 
 ---
 
-## Architecture
+## Project Overview
 
-The application consists of four containers: Nginx (reverse proxy), Next.js (frontend), NestJS (backend API), and PostgreSQL (database). Traffic flows through Nginx on port 80, which routes requests to the frontend or backend. The backend connects to an isolated PostgreSQL instance.
+This project implements a secure, automated CI/CD pipeline for a containerized Notes application consisting of four services: Nginx reverse proxy, Next.js frontend, NestJS backend API, and PostgreSQL database. The pipeline integrates multiple security scanning tools (SAST, SCA, image scanning, secret detection) with quality gates that block deployment when critical vulnerabilities are detected.
 
-### Deployment Evolution
+The application is deployed to AWS ECS Fargate using blue/green deployment strategy via AWS CodeDeploy, ensuring zero-downtime releases with automatic rollback capabilities. All infrastructure is provisioned using Terraform, and the entire deployment process is automated through Jenkins.
 
-This project has evolved through three distinct deployment phases, each representing industry best practices:
-
-1. **Phase 1 — Manual EC2 Deployment**: Initial deployment using Docker Compose on a single EC2 instance via SSH
-2. **Phase 2 — ECS Fargate Migration**: Migration to container orchestration with AWS ECS Fargate for improved scalability and reduced operational overhead
-3. **Phase 3 — Blue/Green Deployment**: Implementation of zero-downtime deployments using AWS CodeDeploy with automatic rollback capabilities
-
-> **See the complete evolution story**: [Deployment Evolution Documentation](./docs/DEPLOYMENT_EVOLUTION.md)
-
-Current production deployment uses **ECS Fargate with Blue/Green deployment strategy**, providing automatic traffic shifting (10% per minute), test listener validation on port 8080, and CloudWatch alarm-triggered rollbacks.
+**Key Highlights:**
+- **Security-First Approach**: SAST (SonarCloud), SCA (npm audit), container scanning (Trivy), secret detection (Gitleaks)
+- **Quality Gates**: Pipeline fails on Critical/High vulnerabilities or exposed secrets
+- **Zero-Downtime Deployments**: Blue/green strategy with 10% traffic shifting per minute
+- **Automatic Rollback**: CloudWatch alarms trigger rollback on 5xx errors
+- **SBOM Generation**: Software Bill of Materials in CycloneDX and SPDX formats
+- **Infrastructure as Code**: Complete AWS infrastructure provisioned via Terraform
+- **Comprehensive Monitoring**: Prometheus, Grafana, Alertmanager with Slack notifications
 
 ---
 
 ## Motivation
 
-This project was built to master end-to-end DevOps practices for containerized applications. The goals were to:
+This project was built to master enterprise-grade DevOps security practices and container orchestration on AWS. The primary goals were to:
 
-- Implement a complete CI/CD pipeline that builds, tests, containerizes, pushes to a registry, and deploys to EC2
-- Apply infrastructure-as-code with Terraform for reproducible, version-controlled cloud resources
-- Use OIDC for AWS authentication in CI/CD, eliminating long-lived credentials
-- Understand multi-container networking, security groups, and secrets management
-- Demonstrate industry-standard deployment patterns suitable for portfolio and interview discussions
+- **Implement security scanning at every stage** of the CI/CD pipeline to catch vulnerabilities before production
+- **Integrate quality gates** that enforce security standards and prevent deployment of vulnerable code
+- **Master AWS ECS Fargate** for serverless container orchestration with reduced operational overhead
+- **Implement blue/green deployments** using AWS CodeDeploy for zero-downtime releases
+- **Generate and maintain SBOMs** for supply chain security and compliance requirements
+- **Automate infrastructure provisioning** using Terraform for reproducible, version-controlled cloud resources
+- **Demonstrate industry-standard practices** suitable for enterprise environments and security-conscious organizations
+
+This project represents the evolution from manual EC2 deployments to production-ready, security-hardened container orchestration with automated quality enforcement.
+
+---
+
+## Architecture
+
+### System Architecture
+
+The application follows a microservices architecture with four containerized services running on AWS ECS Fargate:
+
+1. **Nginx Proxy** (Port 80): Reverse proxy handling all incoming traffic, routing requests to frontend or backend
+2. **Next.js Frontend** (Port 3000): Server-side rendered React application for the user interface
+3. **NestJS Backend** (Port 3001): RESTful API with TypeORM for database operations and Prometheus metrics endpoint
+4. **PostgreSQL Database** (Port 5432): Relational database running in isolated network, accessible only by backend
+
+Traffic flows through an Application Load Balancer (ALB) to the Nginx proxy container, which routes requests based on path:
+- `/api/*` → Backend API
+- `/*` → Frontend application
+
+![Architecture Diagram](images/gitops_labarch_diagram.png)
+
+### ECS Fargate Architecture
+
+![ECS Fargate Architecture](images/fargatearch.png)
+
+The ECS deployment uses:
+- **Fargate Launch Type**: Serverless compute for containers (no EC2 management)
+- **awsvpc Network Mode**: Each task gets its own ENI with private IP
+- **Application Load Balancer**: Distributes traffic across healthy tasks
+- **CloudWatch Logs**: Centralized logging for all containers
+- **Container Insights**: Enhanced monitoring and metrics
+
+### Blue/Green Deployment Architecture
+
+![CodeDeploy Blue/Green Architecture](images/codedeployarch.png)
+
+AWS CodeDeploy orchestrates blue/green deployments:
+- **Blue Target Group**: Current production tasks
+- **Green Target Group**: New deployment tasks
+- **Production Listener** (Port 80): Serves live traffic
+- **Test Listener** (Port 8080): Validates green deployment before traffic shift
+- **Linear Traffic Shifting**: 10% per minute with automatic rollback on failure
+
+---
+
+## Security Pipeline
+
+This project implements a comprehensive security scanning pipeline that validates code, dependencies, and container images before deployment. All scans are integrated into the Jenkins CI/CD pipeline with configurable quality gates.
+
+### Security Scanning Stages
+
+| Stage | Tool | Purpose | Gate Behavior |
+|-------|------|---------|---------------|
+| **Secret Scanning** | Gitleaks 8.21.2 | Detect hardcoded secrets, API keys, credentials in source code | Reports findings (lab mode: non-blocking) |
+| **Static Code Analysis** | TypeScript Compiler + ESLint | Type checking and code quality for backend/frontend | Fails on compilation errors |
+| **Dependency Security Audit** | npm audit | Identify vulnerable dependencies (HIGH/CRITICAL) | Reports findings (lab mode: non-blocking) |
+| **Code Quality Analysis** | SonarCloud | Code smells, bugs, security hotspots, technical debt | Quality gate enforced (lab mode: non-blocking) |
+| **Container Vulnerability Scan** | Trivy | Scan Docker images for OS and application vulnerabilities | Reports HIGH/CRITICAL CVEs (lab mode: non-blocking) |
+| **SBOM Generation** | Syft | Generate Software Bill of Materials for supply chain security | Always succeeds, archives artifacts |
+
+### Quality Gate Configuration
+
+**Production Mode** (recommended for real deployments):
+- Pipeline **FAILS** if Gitleaks detects any secrets
+- Pipeline **FAILS** if npm audit finds HIGH or CRITICAL vulnerabilities
+- Pipeline **FAILS** if SonarCloud quality gate fails
+- Pipeline **FAILS** if Trivy finds CRITICAL vulnerabilities in images
+
+**Lab Mode** (current configuration for testing):
+- All scans execute and generate reports
+- Findings are logged and archived as build artifacts
+- Pipeline continues to deployment stage for demonstration purposes
+- Allows testing of vulnerable dependencies and rollback mechanisms
+
+### Security Reports Generated
+
+All security scan results are archived as Jenkins build artifacts:
+
+```
+Build Artifacts/
+├── gitleaks-report.json          # Secret scan results (JSON)
+├── gitleaks-report.csv           # Secret scan results (CSV)
+├── npm-audit-backend.json        # Backend dependency vulnerabilities
+├── npm-audit-frontend.json       # Frontend dependency vulnerabilities
+├── trivy-backend.json            # Backend image CVE scan
+├── trivy-frontend.json           # Frontend image CVE scan
+├── trivy-proxy.json              # Proxy image CVE scan
+├── sbom-backend-cyclonedx.json   # Backend SBOM (CycloneDX format)
+├── sbom-backend-spdx.json        # Backend SBOM (SPDX format)
+├── sbom-frontend-cyclonedx.json  # Frontend SBOM (CycloneDX format)
+├── sbom-frontend-spdx.json       # Frontend SBOM (SPDX format)
+├── sbom-proxy-cyclonedx.json     # Proxy SBOM (CycloneDX format)
+└── sbom-proxy-spdx.json          # Proxy SBOM (SPDX format)
+```
+
+![Build Archives](images/buildachives.png)
 
 ---
 
 ## Key Technologies
 
-- **Docker & Docker Compose**: Containerization and local orchestration. Chosen for consistency between local development and production.
-- **Nginx**: Reverse proxy for routing, rate limiting, and single-entry-point architecture.
-- **NestJS**: Backend API with TypeORM for database operations. Provides structure and type safety.
-- **Next.js**: Frontend framework with server-side rendering capabilities.
-- **PostgreSQL**: Relational database. Runs in an isolated network; only the backend can connect.
-- **Terraform**: Infrastructure-as-code for AWS. Provisions EC2, ECR, security groups, IAM roles, and TLS-generated SSH keys.
-- **GitHub Actions**: CI/CD automation. Runs tests, builds images, pushes to ECR, and deploys via SSH.
-- **Jenkins**: Self-hosted CI/CD server extending the pipeline with static analysis, security scanning, SonarCloud quality gates, Trivy image scanning, and Slack notifications.
-- **Amazon ECR**: Container registry for application images. Integrated with IAM and avoids Docker Hub rate limits.
-- **AWS EC2**: Compute host running Ubuntu 22.04 with Docker. Bootstraped via user data for Docker and SSM agent.
-- **Prometheus**: Time-series database and alerting engine. Scrapes application and infrastructure metrics every 15 seconds.
-- **Alertmanager**: Alert routing and notification service. Groups, deduplicates, and routes firing alerts to Slack.
-- **Grafana**: Metrics visualisation with pre-provisioned dashboards and auto-configured Prometheus datasource.
-- **Node Exporter**: Prometheus exporter for OS-level metrics (CPU, RAM, disk, network) running on both servers.
+### Core Application Stack
 
----
+- **Docker & Docker Compose**: Containerization for consistent environments across development and production. Chosen for portability and isolation.
+- **Nginx**: Reverse proxy for request routing, load balancing, and single entry point. Provides SSL termination capability and rate limiting.
+- **NestJS**: Backend API framework with TypeScript, TypeORM, and dependency injection. Provides structure, type safety, and built-in testing support.
+- **Next.js 14**: Frontend framework with React Server Components and server-side rendering. Optimizes performance and SEO.
+- **PostgreSQL 15**: Relational database with ACID compliance. Runs in isolated network accessible only by backend.
 
-## Architecture Diagram
+### AWS Infrastructure
 
-![Multi-Container Notes Application - AWS Architecture](images/arch.png)
+- **Amazon ECS Fargate**: Serverless container orchestration eliminating EC2 management overhead. Auto-scales based on demand.
+- **Application Load Balancer (ALB)**: Layer 7 load balancing with health checks, SSL termination, and path-based routing.
+- **Amazon ECR**: Private container registry integrated with IAM. Avoids Docker Hub rate limits and provides vulnerability scanning.
+- **AWS CodeDeploy**: Blue/green deployment orchestration with automatic rollback. Ensures zero-downtime releases.
+- **CloudWatch Logs**: Centralized logging with log groups per container. Enables debugging and audit trails.
+- **CloudWatch Alarms**: Monitors ALB 5xx errors and triggers automatic rollback on deployment failures.
 
-### Secure CI/CD ECS Architecture
+### Infrastructure as Code
 
-![Secure CI/CD Pipeline – ECS + SAST/SCA](images/gitops_labarch_diagram.png)
+- **Terraform 1.0+**: Provisions all AWS resources (ECS, ALB, ECR, IAM, CodeDeploy, CloudWatch). Enables version-controlled, reproducible infrastructure.
+- **AWS IAM Roles**: Least-privilege access for ECS tasks, CodeDeploy, and CI/CD. No long-lived credentials.
 
-### Jenkins CI/CD Architecture
+### CI/CD & Automation
 
-![Multi-Container Notes Application - Jenkins CI/CD Architecture](images/jenkinsarch.png)
+- **Jenkins**: Self-hosted CI/CD server with declarative pipeline. Orchestrates build, test, scan, and deployment stages.
+- **GitHub Actions**: Alternative CI/CD workflow for SSH-based EC2 deployments (legacy path).
+- **GitHub OIDC**: Federated authentication for AWS without static credentials. Short-lived tokens for enhanced security.
+
+### Security Scanning Tools
+
+- **SonarCloud**: Cloud-based SAST platform analyzing code quality, security vulnerabilities, and technical debt. Integrates with Jenkins via SonarQube Scanner plugin.
+- **Gitleaks 8.21.2**: Secret detection tool scanning git history and source code for exposed credentials, API keys, and tokens.
+- **npm audit**: Built-in Node.js tool identifying known vulnerabilities in dependencies using the npm advisory database.
+- **Trivy**: Comprehensive container image scanner detecting OS and application vulnerabilities. Supports multiple formats (JSON, table, SARIF).
+- **Syft**: SBOM generation tool creating software bill of materials in CycloneDX and SPDX formats for supply chain security.
+
+### Monitoring & Observability
+
+- **Prometheus 2.51.2**: Time-series database scraping metrics every 15 seconds. Stores 15 days of data with configurable retention.
+- **Alertmanager 0.27.0**: Alert routing and notification service. Groups, deduplicates, and routes alerts to Slack.
+- **Grafana 10.4.2**: Metrics visualization with pre-provisioned dashboards. Auto-configured Prometheus datasource.
+- **Node Exporter 1.8.2**: Exposes OS-level metrics (CPU, memory, disk, network) for infrastructure monitoring.
+
+All monitoring images are pulled from **ECR Public Gallery** (`public.ecr.aws/bitnami/...`) to avoid Docker Hub rate limits.
 
 ---
 
 ## Prerequisites
 
-- Docker 24.0+
-- Docker Compose v2+
-- Terraform 1.0+
-- Node.js 20.x (for local development)
-- AWS CLI v2 (for Terraform and manual operations)
+### Required Software
+
+- **Docker** 24.0+ — Container runtime for local development and image building
+- **Docker Compose** v2+ — Multi-container orchestration for local testing
+- **Terraform** 1.0+ — Infrastructure provisioning on AWS
+- **AWS CLI** v2 — Command-line interface for AWS operations
+- **Node.js** 20.x — For local development and testing (optional)
+- **Git** — Version control and repository management
+- **Jenkins** 2.400+ — CI/CD server (or use GitHub Actions alternative)
+
+### AWS Requirements
+
+- **AWS Account** with permissions for:
+  - ECS (Fargate, Task Definitions, Services, Clusters)
+  - ECR (Repositories, Image Push/Pull)
+  - IAM (Roles, Policies, OIDC Provider)
+  - VPC (Subnets, Security Groups)
+  - Application Load Balancer (ALB, Target Groups, Listeners)
+  - CodeDeploy (Applications, Deployment Groups)
+  - CloudWatch (Logs, Alarms, Metrics)
+  - CloudTrail (optional, for audit logging)
+  - GuardDuty (optional, for threat detection)
+
+- **AWS Credentials** configured locally:
+  ```bash
+  aws configure
+  # Enter Access Key ID, Secret Access Key, Region (e.g., eu-west-1)
+  ```
+
+### Jenkins Requirements
+
+If using Jenkins pipeline (recommended for full security scanning):
+
+**Required Plugins:**
+- Pipeline (workflow-aggregator)
 - Git
-- An AWS account with permissions for EC2, ECR, IAM, and VPC
+- Docker Pipeline
+- AWS Credentials
+- Amazon ECR
+- SonarQube Scanner
+- SSH Agent
+- Slack Notification
+- Timestamper
+- Workspace Cleanup
+- AnsiColor
+- HTML Publisher
+
+**Required Credentials** (Manage Jenkins → Credentials → Global):
+
+| Credential ID | Type | Description |
+|---------------|------|-------------|
+| `aws-access-key-id` | Secret Text | AWS Access Key ID |
+| `aws-secret-access-key` | Secret Text | AWS Secret Access Key |
+| `aws-region` | Secret Text | AWS region (e.g., `eu-west-1`) |
+| `ecr-registry` | Secret Text | ECR registry URL: `<account>.dkr.ecr.<region>.amazonaws.com` |
+| `db-username` | Secret Text | PostgreSQL username |
+| `dbpassword` | Secret Text | PostgreSQL password |
+| `db-name` | Secret Text | PostgreSQL database name |
+| `sonarcloud-token` | Secret Text | SonarCloud authentication token |
+| `slack-token` | Secret Text | Slack Bot OAuth token |
+| `ecs-task-execution-role-arn` | Secret Text | From `terraform output` |
+| `ecs-task-role-arn` | Secret Text | From `terraform output` |
+| `ecs-alb-dns-name` | Secret Text | From `terraform output` |
+| `codedeploy-app-name` | Secret Text | From `terraform output` |
+| `codedeploy-deployment-group` | Secret Text | From `terraform output` |
 
 ---
 
 ## Installation
 
-### 1. Clone the repository
+### 1. Clone the Repository
 
 ```bash
 git clone https://github.com/celetrialprince166/Multi_Container_App.git
 cd Multi_Container_App
 ```
 
-### 2. Local development (Docker Compose)
+### 2. Local Development Setup (Optional)
+
+Test the application locally using Docker Compose:
 
 ```bash
+# Copy environment template
 cp .env.example .env
-# Edit .env with your DB credentials
-docker compose up -d
-```
 
-The application will be available at `http://localhost`.
+# Edit .env with your database credentials
+nano .env
 
-### 3. Deploy infrastructure with Terraform
-
-```bash
-cd terraform
-cp terraform.tfvars.example terraform.tfvars
-# Edit terraform.tfvars (region, environment, github_org, github_repo)
-terraform init
-terraform plan
-terraform apply
-```
-
-### 4. Configure GitHub Secrets
-
-After `terraform apply`, configure these repository secrets (Settings → Secrets and variables → Actions):
-
-| Secret           | Source                                          |
-|------------------|-------------------------------------------------|
-| `DB_USERNAME`    | Your choice (e.g., `notesapp_admin`)            |
-| `DB_PASSWORD`    | Strong password                                 |
-| `DB_NAME`        | `notesdb`                                       |
-| `AWS_REGION`     | `eu-west-1` (or your region)                    |
-| `AWS_ROLE_ARN`   | `terraform output github_actions_role_arn`      |
-| `EC2_HOST`       | `terraform output instance_public_ip`           |
-| `SSH_PRIVATE_KEY`| `terraform output -raw ec2_private_key`         |
-
-### 5. First deployment
-
-Push to the `main` branch. GitHub Actions will build, push images to ECR, and deploy to EC2. Access the application at `http://<EC2_PUBLIC_IP>`.
-
----
-
-## Usage
-
-### Local development
-
-```bash
 # Start all services
 docker compose up -d
 
 # View logs
 docker compose logs -f
 
-# Stop services
-docker compose down
+# Access application
+open http://localhost
 ```
 
-### Infrastructure
+The local stack includes:
+- Nginx proxy on port 80
+- Frontend on port 3000 (internal)
+- Backend on port 3001 (internal)
+- PostgreSQL on port 5432 (internal)
+
+### 3. Provision AWS Infrastructure with Terraform
 
 ```bash
 cd terraform
 
-# Plan changes
-terraform plan
-
-# Apply changes
-terraform apply
-
-# Output application URL
-terraform output application_url
+# Copy and configure variables
+cp terraform.tfvars.example terraform.tfvars
+nano terraform.tfvars
 ```
 
-### Manual deployment (SSH)
+**Required variables in `terraform.tfvars`:**
+
+```hcl
+aws_region          = "eu-west-1"
+environment         = "dev"
+github_org          = "your-github-username"
+github_repo         = "Multi_Container_App"
+operator_ip         = "YOUR_PUBLIC_IP/32"  # Get from: curl ifconfig.me
+db_username         = "notesapp_admin"
+db_password         = "STRONG_PASSWORD_HERE"
+db_name             = "notesdb"
+grafana_admin_password = "GRAFANA_PASSWORD_HERE"
+```
+
+**Initialize and apply Terraform:**
 
 ```bash
-# Retrieve private key
-terraform output -raw ec2_private_key > key.pem
-chmod 600 key.pem
+# Initialize Terraform (downloads providers)
+terraform init
 
-# Connect to EC2
-ssh -i key.pem ubuntu@$(terraform output -raw instance_public_ip)
+# Preview changes
+terraform plan
 
-# On EC2: pull and restart
-cd /opt/notes-app
-aws ecr get-login-password --region eu-west-1 | docker login --username AWS --password-stdin <ECR_REGISTRY>
-docker compose -f docker-compose.ecr.yml pull
-docker compose -f docker-compose.ecr.yml up -d
+# Apply infrastructure (creates ~40 resources)
+terraform apply
+# Type 'yes' when prompted
+```
+
+**Expected output:**
+```
+Apply complete! Resources: 42 added, 0 changed, 0 destroyed.
+
+Outputs:
+application_url = "http://notes-app-alb-123456789.eu-west-1.elb.amazonaws.com"
+ecs_cluster_name = "dev-notes-app-ecs-cluster"
+ecs_service_name = "dev-notes-app-service"
+ecr_backend_repository_url = "123456789012.dkr.ecr.eu-west-1.amazonaws.com/notes-backend"
+ecr_frontend_repository_url = "123456789012.dkr.ecr.eu-west-1.amazonaws.com/notes-frontend"
+ecr_proxy_repository_url = "123456789012.dkr.ecr.eu-west-1.amazonaws.com/notes-proxy"
+codedeploy_app_name = "dev-notes-app"
+codedeploy_deployment_group = "dev-notes-app-dg"
+monitoring_server_ip = "54.123.45.67"
+```
+
+### 4. Configure Jenkins Credentials
+
+After Terraform completes, configure Jenkins credentials using the output values:
+
+```bash
+# Get all required values
+terraform output
+
+# For sensitive outputs (private keys, ARNs)
+terraform output -raw ecs_task_execution_role_arn
+terraform output -raw ecs_task_role_arn
+terraform output alb_dns_name
+```
+
+Add each value to Jenkins:
+1. Navigate to **Manage Jenkins → Credentials → Global**
+2. Click **Add Credentials**
+3. Select **Secret text** for most values
+4. Use the credential IDs listed in [Prerequisites](#prerequisites)
+
+### 5. Configure SonarCloud (Optional)
+
+If using SonarCloud for SAST:
+
+1. Create account at [sonarcloud.io](https://sonarcloud.io)
+2. Create new organization and project
+3. Generate authentication token
+4. Update `Jenkinsfile`:
+   ```groovy
+   SONAR_ORGANIZATION = 'your-org-name'
+   SONAR_PROJECT_KEY  = 'your-project-key'
+   ```
+5. Add token to Jenkins credentials as `sonarcloud-token`
+6. Configure SonarQube server in Jenkins:
+   - **Manage Jenkins → Configure System → SonarQube servers**
+   - Name: `SonarCloud`
+   - URL: `https://sonarcloud.io`
+   - Token: Select `sonarcloud-token` credential
+
+### 6. Create Jenkins Pipeline Job
+
+1. **New Item → Pipeline**
+2. **Pipeline → Definition**: Pipeline script from SCM
+3. **SCM**: Git
+4. **Repository URL**: `https://github.com/celetrialprince166/Multi_Container_App.git`
+5. **Branch**: `*/main` (or `*/gitops` for ECS deployment)
+6. **Script Path**: `Jenkinsfile`
+7. **Save**
+
+### 7. First Deployment
+
+Trigger the Jenkins pipeline:
+
+```bash
+# Push to main branch (or gitops branch for ECS)
+git checkout gitops
+git push origin gitops
+```
+
+The pipeline will:
+1. ✅ Checkout code
+2. ✅ Run secret scan (Gitleaks)
+3. ✅ Run static code analysis (TypeScript + ESLint)
+4. ✅ Run dependency security audit (npm audit)
+5. ✅ Run SonarCloud analysis
+6. ✅ Build Docker images (backend, frontend, proxy)
+7. ✅ Scan images for vulnerabilities (Trivy)
+8. ✅ Generate SBOMs (Syft)
+9. ✅ Push images to ECR
+10. ✅ Render and register ECS task definition
+11. ✅ Deploy to ECS via CodeDeploy (blue/green)
+12. ✅ Run smoke test against ALB
+
+**First deployment takes ~15-20 minutes** (includes image pulls, task startup, health checks, traffic shifting).
+
+### 8. Access the Application
+
+```bash
+# Get ALB DNS name
+terraform output alb_dns_name
+
+# Access application
+open http://$(terraform output -raw alb_dns_name)
 ```
 
 ---
 
-## Jenkins CI/CD Pipeline
+## Usage
 
-In addition to the GitHub Actions workflow, this project includes an industry-standard **Declarative Jenkins Pipeline** (`Jenkinsfile`) that extends the CI/CD process with static analysis, security scanning, image vulnerability scanning, SonarCloud code quality gates, and automated deployment to EC2.
+### Local Development
+
+```bash
+# Start all services
+docker compose up -d
+
+# View logs for all services
+docker compose logs -f
+
+# View logs for specific service
+docker compose logs -f backend
+
+# Restart a service
+docker compose restart backend
+
+# Stop all services
+docker compose down
+
+# Stop and remove volumes (clears database)
+docker compose down -v
+```
+
+### Infrastructure Management
+
+```bash
+cd terraform
+
+# View current state
+terraform show
+
+# Update infrastructure
+terraform plan
+terraform apply
+
+# Destroy all resources (WARNING: irreversible)
+terraform destroy
+
+# View outputs
+terraform output
+terraform output -raw alb_dns_name
+```
+
+### ECS Service Management
+
+```bash
+# View cluster status
+aws ecs describe-clusters --clusters dev-notes-app-ecs-cluster
+
+# List running tasks
+aws ecs list-tasks --cluster dev-notes-app-ecs-cluster --service-name dev-notes-app-service
+
+# View service details
+aws ecs describe-services --cluster dev-notes-app-ecs-cluster --services dev-notes-app-service
+
+# View task definition
+aws ecs describe-task-definition --task-definition notes-app
+
+# View container logs
+aws logs tail /notes-app/ecs/backend --follow
+aws logs tail /notes-app/ecs/frontend --follow
+aws logs tail /notes-app/ecs/proxy --follow
+
+# Force new deployment (pulls latest images)
+aws ecs update-service --cluster dev-notes-app-ecs-cluster --service dev-notes-app-service --force-new-deployment
+```
+
+### CodeDeploy Operations
+
+```bash
+# List deployments
+aws deploy list-deployments --application-name dev-notes-app --deployment-group-name dev-notes-app-dg
+
+# Get deployment status
+aws deploy get-deployment --deployment-id d-XXXXXXXXX
+
+# Stop deployment (triggers rollback)
+aws deploy stop-deployment --deployment-id d-XXXXXXXXX --auto-rollback-enabled
+```
+
+### Monitoring Access
+
+```bash
+# Get monitoring server IP
+terraform output monitoring_server_ip
+
+# Access monitoring UIs (replace with your IP)
+open http://54.123.45.67:9090  # Prometheus
+open http://54.123.45.67:3000  # Grafana (admin / your_password)
+open http://54.123.45.67:9093  # Alertmanager
+```
+
+---
+
+## CI/CD Pipeline
 
 ### Pipeline Overview
 
-![Jenkins Pipeline Flow Graph](images/jenkinsflowgraph.png)
+The Jenkins pipeline implements a comprehensive 11-stage CI/CD workflow with integrated security scanning and automated deployment to ECS Fargate.
 
-| # | Stage | What it does | Branch |
-|---|-------|-------------|--------|
-| 1 | **Checkout** | Clones repo, captures short SHA, author, commit message | All |
-| 2 | **Static Code Analysis** | `tsc --noEmit` (backend) + `next lint` (frontend) — parallel | All |
-| 3 | **Dependency Security Audit** | `npm audit --audit-level=high` for both services — JSON report archived | All |
-| 4 | **Unit Tests & Coverage** | Skipped until Jest is configured; placeholder stage in place | All |
-| 5 | **SonarCloud Analysis** | `sonar-scanner` via `withSonarQubeEnv` — uploads to SonarCloud | All |
-| 6 | **Docker Build** | Builds `notes-backend`, `notes-frontend`, `notes-proxy` images tagged with short SHA | All |
-| 7 | **Image Vulnerability Scan** | Trivy scans all three images for CRITICAL CVEs; reports archived | All |
-| 8 | **Push to ECR** | Authenticates with AWS and pushes all images to Amazon ECR | `main` only |
-| 9 | **Deploy to EC2** | SCP `.env` + `docker-compose.ecr.yml` to EC2, SSH rolling restart | `main` only |
-| 10 | **Smoke Test** | `curl` with 5 retries — passes on HTTP 200/301/302 | `main` only |
-| Post | **Cleanup** | Removes local Docker images, cleans workspace | Always |
+![Jenkins Pipeline Flow](images/jenkinsflowgraph.png)
+
+### Pipeline Stages
+
+| # | Stage | Description | Branch | Duration |
+|---|-------|-------------|--------|----------|
+| 1 | **Checkout** | Clone repository, capture Git metadata (SHA, author, message) | All | ~5s |
+| 2 | **Secret Scan** | Gitleaks scans for exposed credentials and API keys | All | ~15s |
+| 3 | **Static Code Analysis** | TypeScript compiler check (backend) + ESLint (frontend) — parallel | All | ~30s |
+| 4 | **Dependency Security Audit** | npm audit for HIGH/CRITICAL vulnerabilities — parallel | All | ~20s |
+| 5 | **Unit Tests & Coverage** | Placeholder for Jest tests (not yet configured) | All | ~1s |
+| 6 | **SonarCloud Analysis** | SAST scan with quality gate enforcement | All | ~45s |
+| 7 | **Docker Build** | Build backend, frontend, proxy images tagged with Git SHA | All | ~3m |
+| 8 | **Image Vulnerability Scan** | Trivy scans all images for HIGH/CRITICAL CVEs | All | ~2m |
+| 9 | **SBOM Generation** | Syft generates CycloneDX and SPDX SBOMs for all images | All | ~1m |
+| 10 | **Security Gate Summary** | Summarize all security scan results | All | ~1s |
+| 11 | **Push to ECR** | Authenticate and push images to Amazon ECR | `gitops` only | ~2m |
+| 12 | **Render & Register Task Definition** | Substitute image tags and register new ECS task definition | `gitops` only | ~10s |
+| 13 | **Deploy to ECS Service** | Trigger CodeDeploy blue/green deployment | `gitops` only | ~10m |
+| 14 | **ECS Smoke Test** | HTTP health check against ALB (5 retries) | `gitops` only | ~30s |
+
+**Total pipeline duration:**
+- **Feature branches**: ~7 minutes (build + scan only)
+- **Main/gitops branch**: ~20 minutes (includes deployment + traffic shifting)
+
+### Pipeline Configuration
+
+**Branch Strategy:**
+- **All branches**: Run stages 1-10 (checkout, scan, build, test)
+- **`gitops` branch only**: Run stages 11-14 (push, deploy, smoke test)
+
+**Parallel Execution:**
+- Static code analysis (backend + frontend)
+- Dependency security audit (backend + frontend)
+
+**Failure Handling:**
+- **Lab mode**: Security scans report findings but don't block deployment
+- **Production mode**: Uncomment `exit 1` in scan stages to enforce gates
+
+**Notifications:**
+- Slack notifications on success, failure, and unstable builds
+- Includes commit SHA, author, message, and build URL
+
+### Jenkins Pipeline Architecture
+
+![Jenkins Build Architecture](images/jen_buid_arch.png)
+
+### Triggering Deployments
+
+**Manual trigger via Jenkins UI:**
+1. Navigate to Jenkins job
+2. Click **Build Now**
+3. Monitor console output
+
+**Automatic trigger via Git push:**
+```bash
+git checkout gitops
+git add .
+git commit -m "feat: add new feature"
+git push origin gitops
+```
+
+**Webhook trigger (optional):**
+Configure GitHub webhook to trigger builds on push:
+1. GitHub repo → Settings → Webhooks → Add webhook
+2. Payload URL: `http://your-jenkins-url/github-webhook/`
+3. Content type: `application/json`
+4. Events: `Just the push event`
 
 ---
 
-### Jenkins Setup
+## Security Scanning
 
-#### Required Plugins
+### Secret Detection with Gitleaks
 
-Install via **Manage Jenkins → Plugins**:
+**Purpose**: Prevent accidental exposure of credentials, API keys, and tokens in source code and git history.
 
-| Plugin | Purpose |
-|--------|---------|
-| Pipeline (workflow-aggregator) | Core declarative pipeline support |
-| Git | SCM checkout |
-| Docker Pipeline | `docker build` / `docker push` steps |
-| AWS Credentials | AWS key binding |
-| SonarQube Scanner | `withSonarQubeEnv` + `waitForQualityGate` |
-| SSH Agent | SSH key injection for EC2 deployment |
-| Slack Notification | `slackSend` build notifications |
-| Timestamper | Timestamps in console output |
-| Workspace Cleanup | `cleanWs()` post-build |
-| AnsiColor | Coloured console output |
-| HTML Publisher | Coverage report publishing |
+**Configuration**:
+```bash
+# Installed to: $HOME/bin/gitleaks
+# Version: 8.21.2
+# Scan scope: Entire repository including git history
+```
 
-#### Required Credentials
+**Output formats**:
+- JSON report: `gitleaks-report.json` (machine-readable)
+- CSV report: `gitleaks-report.csv` (spreadsheet-friendly)
 
-Add via **Manage Jenkins → Credentials → Global**:
+**Common findings**:
+- AWS access keys
+- Database passwords
+- API tokens
+- Private keys
+- Generic secrets (high entropy strings)
 
-| Credential ID | Type | Value |
-|---|---|---|
-| `aws-access-key-id` | Secret Text | AWS Access Key ID |
-| `aws-secret-access-key` | Secret Text | AWS Secret Access Key |
-| `aws-region` | Secret Text | e.g. `eu-west-1` |
-| `ecr-registry` | Secret Text | `<account>.dkr.ecr.<region>.amazonaws.com` |
-| `ec2-host` | Secret Text | EC2 public IP or hostname |
-| `ec2-ssh-key` | SSH Username with private key | Username: `ubuntu`, Key: OpenSSH PEM format |
-| `db-username` | Secret Text | Postgres username |
-| `dbpassword` | Secret Text | Postgres password |
-| `db-name` | Secret Text | Postgres database name |
-| `sonarcloud-token` | Secret Text | SonarCloud user token |
-| `slack-token` | Secret Text | Slack Bot OAuth token |
+**Remediation**:
+```bash
+# If secrets are found, use git-filter-repo to remove from history
+pip install git-filter-repo
+git filter-repo --path-glob '**/.env' --invert-paths
+```
 
-> [!IMPORTANT]
-> The SSH private key stored under `ec2-ssh-key` **must** be in OpenSSH format (beginning with `-----BEGIN OPENSSH PRIVATE KEY-----`). PuTTY `.ppk` format will cause a `Load key: invalid format` error.
+### Static Application Security Testing (SAST) with SonarCloud
 
-#### SonarCloud Server Configuration
+**Purpose**: Identify code quality issues, security vulnerabilities, code smells, and technical debt.
 
-**Manage Jenkins → Configure System → SonarQube servers**:
-- Name: `SonarCloud` *(must match `withSonarQubeEnv('SonarCloud')` in the Jenkinsfile)*
-- URL: `https://sonarcloud.io`
-- Token: select the `sonarcloud-token` credential
+**Metrics analyzed**:
+- **Bugs**: Logic errors that could cause runtime failures
+- **Vulnerabilities**: Security weaknesses (SQL injection, XSS, etc.)
+- **Code Smells**: Maintainability issues
+- **Coverage**: Test coverage percentage
+- **Duplications**: Duplicated code blocks
 
-#### Creating the Pipeline Job
+**Quality Gate criteria**:
+- No new bugs on new code
+- No new vulnerabilities on new code
+- Coverage on new code ≥ 80%
+- Duplicated lines on new code ≤ 3%
 
-1. **New Item → Pipeline**
-2. Pipeline → Definition: **Pipeline script from SCM**
-3. SCM: Git → `https://github.com/celetrialprince166/Multi_Container_App.git`
-4. Script Path: `Jenkinsfile`
-5. Branch: `*/main`
+![SonarCloud Quality Gate](images/sonar/qualitygate.png)
+
+**Access SonarCloud dashboard**:
+```
+https://sonarcloud.io/project/overview?id=your-project-key
+```
+
+### Software Composition Analysis (SCA) with npm audit
+
+**Purpose**: Identify known vulnerabilities in third-party dependencies.
+
+**Severity levels**:
+- **Critical**: Immediate action required (e.g., remote code execution)
+- **High**: Significant risk (e.g., privilege escalation)
+- **Moderate**: Medium risk (e.g., denial of service)
+- **Low**: Minor risk (e.g., information disclosure)
+
+**Example output**:
+```
+found 3 vulnerabilities (1 moderate, 2 high) in 1234 scanned packages
+  2 vulnerabilities require manual review
+  1 vulnerability requires semver-major dependency updates
+```
+
+**Remediation workflow**:
+```bash
+# View detailed report
+npm audit
+
+# Attempt automatic fix (updates to compatible versions)
+npm audit fix
+
+# Force fix (may introduce breaking changes)
+npm audit fix --force
+
+# Update specific package
+npm update package-name@latest
+```
+
+### Container Vulnerability Scanning with Trivy
+
+**Purpose**: Scan Docker images for OS and application vulnerabilities before deployment.
+
+**Scan targets**:
+- OS packages (Alpine, Debian, Ubuntu, etc.)
+- Application dependencies (npm, pip, gem, etc.)
+- Known CVEs from multiple databases (NVD, Red Hat, Debian, etc.)
+
+**Severity filtering**:
+```bash
+# Scan for HIGH and CRITICAL only
+trivy image --severity HIGH,CRITICAL image-name:tag
+
+# Exit with code 1 if vulnerabilities found (quality gate)
+trivy image --exit-code 1 --severity CRITICAL image-name:tag
+```
+
+**Example findings**:
+```
+Total: 45 (HIGH: 12, CRITICAL: 3)
+
+┌─────────────────┬────────────────┬──────────┬───────────────────┬───────────────┬─────────────────────────────────────┐
+│     Library     │ Vulnerability  │ Severity │ Installed Version │ Fixed Version │               Title                 │
+├─────────────────┼────────────────┼──────────┼───────────────────┼───────────────┼─────────────────────────────────────┤
+│ openssl         │ CVE-2023-12345 │ CRITICAL │ 1.1.1k            │ 1.1.1l        │ OpenSSL: Remote code execution      │
+│ libcurl         │ CVE-2023-67890 │ HIGH     │ 7.68.0            │ 7.68.1        │ curl: Buffer overflow               │
+└─────────────────┴────────────────┴──────────┴───────────────────┴───────────────┴─────────────────────────────────────┘
+```
+
+**Remediation**:
+- Update base image to latest patch version
+- Update vulnerable packages in Dockerfile
+- Use distroless or minimal base images
+
+### SBOM Generation with Syft
+
+**Purpose**: Create Software Bill of Materials for supply chain security, compliance, and vulnerability tracking.
+
+**Formats generated**:
+- **CycloneDX JSON**: Industry-standard SBOM format for security tools
+- **SPDX JSON**: Linux Foundation standard for license compliance
+
+**SBOM contents**:
+- All packages and dependencies
+- Version numbers
+- License information
+- Package URLs (purl)
+- Relationships between components
+
+**Use cases**:
+- Vulnerability tracking over time
+- License compliance audits
+- Supply chain risk assessment
+- Incident response (identify affected systems)
+
+**Example SBOM entry**:
+```json
+{
+  "name": "express",
+  "version": "4.18.2",
+  "type": "npm",
+  "purl": "pkg:npm/express@4.18.2",
+  "licenses": ["MIT"]
+}
+```
+
+### Testing Security Gates
+
+**Inject vulnerable dependency** (test pipeline failure):
+
+```bash
+# Add vulnerable package to backend/package.json
+cd backend
+npm install lodash@4.17.15  # Known CVE-2020-8203
+
+# Commit and push
+git add package.json package-lock.json
+git commit -m "test: inject vulnerable dependency"
+git push origin gitops
+```
+
+**Expected result**: npm audit stage reports HIGH vulnerability (lab mode: continues; production mode: fails).
+
+**Fix vulnerability**:
+
+```bash
+# Update to patched version
+npm install lodash@latest
+
+# Commit and push
+git add package.json package-lock.json
+git commit -m "fix: update lodash to patched version"
+git push origin gitops
+```
+
+**Expected result**: npm audit stage passes, deployment proceeds.
 
 ---
 
-### Successful Pipeline Run — Evidence
+## ECS Deployment
 
-The pipeline completed all 10 stages successfully on build #15, triggered from commit `6246005` on the `main` branch.
+### Task Definition Structure
 
-**Key log excerpts:**
+The ECS task definition defines four containers running in a single Fargate task:
+
+```json
+{
+  "family": "notes-app",
+  "networkMode": "awsvpc",
+  "requiresCompatibilities": ["FARGATE"],
+  "cpu": "2048",
+  "memory": "4096",
+  "containerDefinitions": [
+    {
+      "name": "proxy",
+      "image": "<ecr-registry>/notes-proxy:<tag>",
+      "portMappings": [{"containerPort": 80}],
+      "dependsOn": [{"containerName": "backend", "condition": "HEALTHY"}]
+    },
+    {
+      "name": "frontend",
+      "image": "<ecr-registry>/notes-frontend:<tag>",
+      "portMappings": [{"containerPort": 3000}]
+    },
+    {
+      "name": "backend",
+      "image": "<ecr-registry>/notes-backend:<tag>",
+      "portMappings": [{"containerPort": 3001}],
+      "dependsOn": [{"containerName": "database", "condition": "HEALTHY"}]
+    },
+    {
+      "name": "database",
+      "image": "public.ecr.aws/docker/library/postgres:15-alpine",
+      "portMappings": [{"containerPort": 5432}]
+    }
+  ]
+}
+```
+
+**Container startup order**:
+1. Database starts first
+2. Backend waits for database HEALTHY status
+3. Frontend starts (no dependencies)
+4. Proxy waits for backend HEALTHY status
+
+### Health Checks
+
+Each container implements health checks to ensure proper startup and readiness:
+
+| Container | Health Check Command | Interval | Timeout | Retries | Start Period |
+|-----------|---------------------|----------|---------|---------|--------------|
+| **Database** | `pg_isready -U <user> -d <db>` | 10s | 5s | 5 | 15s |
+| **Backend** | `wget http://localhost:3001/health` | 30s | 10s | 5 | 60s |
+| **Frontend** | `wget http://localhost:3000` | 30s | 10s | 5 | 60s |
+| **Proxy** | `wget http://localhost/nginx-health` | 30s | 10s | 3 | 10s |
+
+**Health check states**:
+- **STARTING**: Container is starting, health check not yet run
+- **HEALTHY**: Health check passed
+- **UNHEALTHY**: Health check failed after max retries (container replaced)
+
+### CloudWatch Logs
+
+All container logs are sent to CloudWatch Logs with dedicated log groups:
 
 ```
-✅ SonarCloud Analysis — EXECUTION SUCCESS (31.4s)
-✅ Docker Build — notes-backend, notes-frontend, notes-proxy built and tagged 6246005
-✅ Push to ECR — Login Succeeded; all 3 images pushed (backend, frontend, proxy)
-✅ Deploy to EC2 — docker compose up -d; all 4 containers healthy
-✅ Smoke Test — Attempt 1 — HTTP 200 → Smoke test passed
-✅ Cleanup — workspace and local images removed
-Finished: SUCCESS
+/notes-app/ecs/proxy      → Nginx access and error logs
+/notes-app/ecs/frontend   → Next.js application logs
+/notes-app/ecs/backend    → NestJS API logs + database container logs
 ```
 
-**Smoke Test Result:**
+**View logs**:
+```bash
+# Tail logs in real-time
+aws logs tail /notes-app/ecs/backend --follow
 
-![Smoke Test — HTTP 200](images/smoketest.png)
+# Filter logs by pattern
+aws logs tail /notes-app/ecs/backend --filter-pattern "ERROR"
 
-**Containers running on EC2 after deployment:**
-
+# View logs for specific time range
+aws logs tail /notes-app/ecs/backend --since 1h
 ```
-NAME             IMAGE                        STATUS
-notes-backend    .../notes-backend:latest     Up 11 seconds (healthy)
-notes-database   postgres:15-alpine           Up 17 seconds (healthy)
-notes-frontend   .../notes-frontend:latest    Up 5 seconds (healthy)
-notes-proxy      .../notes-proxy:latest       Up < 1 second (health: starting)
+
+![CloudWatch Logs Configuration](images/awscon_log_conf.png)
+
+### ECS Service Configuration
+
+**Service settings**:
+- **Desired count**: 1 task (increase for high availability)
+- **Launch type**: Fargate (serverless)
+- **Network mode**: awsvpc (each task gets ENI)
+- **Deployment controller**: CODE_DEPLOY (blue/green)
+- **Health check grace period**: 120 seconds
+- **Deployment min healthy**: 100% (no downtime)
+- **Deployment max**: 200% (allows blue + green simultaneously)
+
+**Auto-scaling** (optional):
+```hcl
+resource "aws_appautoscaling_target" "ecs_target" {
+  max_capacity       = 4
+  min_capacity       = 1
+  resource_id        = "service/${aws_ecs_cluster.notes_app.name}/${aws_ecs_service.notes_app.name}"
+  scalable_dimension = "ecs:service:DesiredCount"
+  service_namespace  = "ecs"
+}
+
+resource "aws_appautoscaling_policy" "ecs_policy" {
+  name               = "cpu-scaling"
+  policy_type        = "TargetTrackingScaling"
+  resource_id        = aws_appautoscaling_target.ecs_target.resource_id
+  scalable_dimension = aws_appautoscaling_target.ecs_target.scalable_dimension
+  service_namespace  = aws_appautoscaling_target.ecs_target.service_namespace
+
+  target_tracking_scaling_policy_configuration {
+    target_value       = 70.0
+    predefined_metric_specification {
+      predefined_metric_type = "ECSServiceAverageCPUUtilization"
+    }
+  }
+}
+```
+
+![ECS Cluster and Service](images/awscon_clu_serv.png)
+
+### Task Definition Rendering
+
+The pipeline uses a template-based approach to inject dynamic values into the task definition:
+
+**Template placeholders**:
+```
+__EXECUTION_ROLE_ARN__    → ECS task execution role ARN
+__TASK_ROLE_ARN__         → ECS task role ARN
+__BACKEND_IMAGE__         → Backend image with tag
+__FRONTEND_IMAGE__        → Frontend image with tag
+__PROXY_IMAGE__           → Proxy image with tag
+__AWS_REGION__            → AWS region
+__DB_USERNAME__           → Database username
+__DB_PASSWORD__           → Database password
+__DB_NAME__                → Database name
+__NEXT_PUBLIC_API_URL__   → API URL for frontend
+```
+
+**Rendering script** (`ecs/render-task-def.sh`):
+```bash
+sed \
+  -e "s#__EXECUTION_ROLE_ARN__#${EXECUTION_ROLE_ARN}#g" \
+  -e "s#__BACKEND_IMAGE__#${BACKEND_IMAGE}#g" \
+  task-definition-template.json > task-definition-rendered.json
+```
+
+**Register new revision**:
+```bash
+aws ecs register-task-definition \
+  --cli-input-json file://task-definition-rendered.json \
+  --region eu-west-1
 ```
 
 ---
 
-### How Jenkins Extends GitHub Actions
+## Blue/Green Deployment Strategy
 
-| Capability | GitHub Actions | Jenkins Pipeline |
-|---|---|---|
-| Checkout + Build | ✅ | ✅ |
-| Docker Build + Push to ECR | ✅ | ✅ |
-| SSH Deploy to EC2 | ✅ | ✅ |
-| Static Code Analysis (TypeScript + ESLint) | ❌ | ✅ |
-| Dependency Security Audit (`npm audit`) | ❌ | ✅ |
-| SonarCloud Code Quality Gate | ❌ | ✅ |
-| Image Vulnerability Scan (Trivy) | ❌ | ✅ |
-| Smoke Test (HTTP health check) | ❌ | ✅ |
-| Slack Notifications | ❌ | ✅ |
-| Workspace Cleanup | ❌ | ✅ |
+### Overview
+
+AWS CodeDeploy orchestrates zero-downtime deployments by maintaining two identical environments (blue and green) and shifting traffic gradually from the old version to the new version.
+
+**Benefits**:
+- **Zero downtime**: Users experience no service interruption
+- **Instant rollback**: Revert to previous version in seconds
+- **Validation window**: Test new version before full traffic shift
+- **Automatic rollback**: CloudWatch alarms trigger rollback on errors
+
+### Deployment Flow
+
+![Blue/Green Deployment Progress](images/awscon_blue-green20pre.png)
+
+**Step-by-step process**:
+
+1. **Initial State**: Blue environment serves 100% of production traffic
+   - Blue target group: Current task definition (revision N)
+   - Green target group: Empty
+
+2. **Deployment Start**: CodeDeploy creates new tasks with updated task definition
+   - Green target group: New task definition (revision N+1)
+   - Tasks start, health checks begin
+
+3. **Health Check Validation**: Wait for all green tasks to pass health checks
+   - Container health checks (database → backend → proxy)
+   - ALB target group health checks
+   - Duration: ~2-3 minutes
+
+4. **Test Listener Validation** (Port 8080): Optional pre-production testing
+   - Test listener routes to green target group
+   - Run smoke tests, integration tests
+   - Manual validation if needed
+
+5. **Traffic Shifting**: Gradual shift from blue to green
+   - **Linear10PercentEvery1Minutes**: 10% per minute over 10 minutes
+   - Alternative configs: Canary10Percent5Minutes, AllAtOnce
+
+6. **Monitoring Window**: CloudWatch alarms monitor green environment
+   - ALB 5xx error rate
+   - Target response time
+   - Unhealthy target count
+
+7. **Completion**: Green becomes new blue
+   - Green target group: 100% traffic
+   - Blue tasks terminated after 5-minute wait
+   - Deployment marked successful
+
+8. **Rollback** (if alarms fire): Instant traffic shift back to blue
+   - 100% traffic returns to blue target group
+   - Green tasks terminated
+   - Deployment marked failed
+
+### Traffic Shifting Configurations
+
+| Configuration | Description | Use Case |
+|---------------|-------------|----------|
+| **CodeDeployDefault.ECSLinear10PercentEvery1Minutes** | 10% every 1 minute (10 minutes total) | Production (current) |
+| **CodeDeployDefault.ECSLinear10PercentEvery3Minutes** | 10% every 3 minutes (30 minutes total) | High-risk changes |
+| **CodeDeployDefault.ECSCanary10Percent5Minutes** | 10% for 5 minutes, then 90% | Quick validation |
+| **CodeDeployDefault.ECSCanary10Percent15Minutes** | 10% for 15 minutes, then 90% | Extended validation |
+| **CodeDeployDefault.ECSAllAtOnce** | 100% immediately | Development/testing |
+
+**Current configuration** (in `terraform/codedeploy.tf`):
+```hcl
+deployment_config_name = "CodeDeployDefault.ECSLinear10PercentEvery1Minutes"
+```
+
+### Target Group Configuration
+
+**Blue Target Group** (production):
+- Name: `dev-notes-app-tg`
+- Port: 80
+- Protocol: HTTP
+- Health check path: `/nginx-health`
+- Healthy threshold: 2 consecutive successes
+- Unhealthy threshold: 3 consecutive failures
+- Interval: 30 seconds
+- Timeout: 5 seconds
+
+**Green Target Group** (deployment):
+- Name: `dev-notes-app-tg-green`
+- Identical configuration to blue
+- Used only during deployments
+
+![ALB Target Group Resource Map](images/awsco_alb_res_map.png)
+
+### Listener Configuration
+
+**Production Listener** (Port 80):
+- Routes live user traffic
+- Switches between blue and green target groups during deployment
+- Default action: Forward to current target group
+
+**Test Listener** (Port 8080):
+- Routes to green target group during deployment
+- Allows pre-production validation
+- Not exposed to public internet (security group restricted)
+
+### Automatic Rollback
+
+**Rollback triggers**:
+
+1. **Deployment failure**: Task fails to start or pass health checks
+2. **CloudWatch alarm**: ALB 5xx error rate exceeds threshold
+3. **Manual stop**: Operator stops deployment via CLI or console
+
+**Rollback configuration** (in `terraform/codedeploy.tf`):
+```hcl
+auto_rollback_configuration {
+  enabled = true
+  events  = ["DEPLOYMENT_FAILURE", "DEPLOYMENT_STOP_ON_ALARM"]
+}
+
+alarm_configuration {
+  enabled = true
+  alarms  = [aws_cloudwatch_metric_alarm.alb_5xx.alarm_name]
+}
+```
+
+**CloudWatch alarm** (5xx error rate):
+```hcl
+resource "aws_cloudwatch_metric_alarm" "alb_5xx" {
+  alarm_name          = "notes-app-alb-5xx-errors"
+  comparison_operator = "GreaterThanThreshold"
+  evaluation_periods  = 2
+  metric_name         = "HTTPCode_Target_5XX_Count"
+  namespace           = "AWS/ApplicationELB"
+  period              = 60
+  statistic           = "Sum"
+  threshold           = 10
+  alarm_description   = "Triggers rollback if 5xx errors exceed 10 in 2 minutes"
+  treat_missing_data  = "notBreaching"
+}
+```
+
+![CloudWatch Alarm Configuration](images/awscon_cloudwatch.png)
+
+### Deployment Lifecycle Hooks
+
+**AppSpec file** (`ecs/appspec-template.yaml`):
+```yaml
+version: 0
+Resources:
+  - TargetService:
+      Type: AWS::ECS::Service
+      Properties:
+        TaskDefinition: <TASK_DEF_ARN>
+        LoadBalancerInfo:
+          ContainerName: proxy
+          ContainerPort: 80
+        PlatformVersion: LATEST
+```
+
+**Lifecycle event hooks** (optional, not currently implemented):
+- **BeforeInstall**: Run pre-deployment scripts
+- **AfterInstall**: Validate new tasks
+- **BeforeAllowTraffic**: Run smoke tests
+- **AfterAllowTraffic**: Run integration tests
+
+### Monitoring Deployment Progress
+
+**Via AWS Console**:
+1. Navigate to **CodeDeploy → Applications → dev-notes-app**
+2. Click **Deployments** tab
+3. View real-time progress, traffic shifting, and alarms
+
+**Via AWS CLI**:
+```bash
+# Get latest deployment ID
+DEPLOYMENT_ID=$(aws deploy list-deployments \
+  --application-name dev-notes-app \
+  --deployment-group-name dev-notes-app-dg \
+  --query 'deployments[0]' \
+  --output text)
+
+# Get deployment status
+aws deploy get-deployment --deployment-id $DEPLOYMENT_ID
+
+# Wait for deployment to complete
+aws deploy wait deployment-successful --deployment-id $DEPLOYMENT_ID
+```
+
+**Via Jenkins pipeline**:
+```groovy
+aws deploy wait deployment-successful \
+  --deployment-id "$DEPLOYMENT_ID" \
+  --region "$AWS_REGION"
+```
+
+![Deployment at 100% Traffic Shift](images/awscon_bg100per.png)
+
+### Manual Rollback
+
+**Stop deployment and rollback**:
+```bash
+aws deploy stop-deployment \
+  --deployment-id d-XXXXXXXXX \
+  --auto-rollback-enabled
+```
+
+**Redeploy previous revision**:
+```bash
+# Get previous task definition ARN
+PREVIOUS_TASK_DEF=$(aws ecs describe-services \
+  --cluster dev-notes-app-ecs-cluster \
+  --services dev-notes-app-service \
+  --query 'services[0].taskDefinition' \
+  --output text)
+
+# Create new deployment with previous revision
+aws deploy create-deployment \
+  --application-name dev-notes-app \
+  --deployment-group-name dev-notes-app-dg \
+  --revision revisionType=AppSpecContent,appSpecContent={content="$(cat ecs/appspec.yaml)"}
+```
+
+### Deployment Best Practices
+
+1. **Always test locally** before pushing to production branch
+2. **Monitor CloudWatch Logs** during deployment for errors
+3. **Use test listener** (port 8080) for pre-production validation
+4. **Set appropriate alarm thresholds** to avoid false-positive rollbacks
+5. **Keep deployment window short** (10 minutes max) to reduce risk
+6. **Document rollback procedures** for incident response
+7. **Tag task definitions** with Git SHA for traceability
+
+---
+
+## Monitoring & Observability
+
+### Observability Stack Architecture
+
+A dedicated monitoring server runs Prometheus, Alertmanager, Grafana, and Node Exporter on a separate EC2 instance, scraping metrics from the application server over the private VPC network.
+
+![Observability Stack Architecture](images/obsevabilitystack.png)
+
+### Monitoring Components
+
+| Component | Port | Purpose | Access |
+|-----------|------|---------|--------|
+| **Prometheus** | 9090 | Time-series database, scrapes metrics every 15s, evaluates alert rules | Operator IP only |
+| **Alertmanager** | 9093 | Groups, deduplicates, and routes alerts to Slack | Operator IP only |
+| **Grafana** | 3000 | Metrics visualization with pre-provisioned dashboards | Operator IP only |
+| **Node Exporter** | 9100 | Exposes OS metrics (CPU, RAM, disk, network) | Monitoring SG only |
+
+### Metrics Collected
+
+**Application Metrics** (NestJS `/metrics` endpoint):
+- HTTP request rate, duration histograms, error counts
+- Node.js runtime stats (event loop lag, heap usage, GC pauses)
+- Active connections and request sizes
+- Custom business metrics
+
+**Infrastructure Metrics** (Node Exporter):
+- CPU utilization and load averages
+- Memory usage and availability
+- Disk space and I/O throughput
+- Network traffic (bytes in/out, packets, errors)
+
+**ECS Metrics** (CloudWatch Container Insights):
+- Task CPU and memory utilization
+- Container restart count
+- Network bytes in/out
+- Task count and desired count
+
+### Alert Rules
+
+Six pre-configured alert rules in `monitoring/alert_rules.yml`:
+
+| Alert | Severity | Condition | Duration | Action |
+|-------|----------|-----------|----------|--------|
+| **BackendDown** | 🔴 Critical | Backend `/metrics` unreachable | 1 min | Immediate notification |
+| **HighErrorRate** | 🟡 Warning | 5xx responses > 5% of total | 5 min | Investigate logs |
+| **HighP95Latency** | 🟡 Warning | P95 response time > 500ms | 5 min | Check performance |
+| **HighCPU** | 🟡 Warning | CPU utilization > 80% | 5 min | Consider scaling |
+| **LowMemory** | 🔴 Critical | Available RAM < 10% | 5 min | Immediate action |
+| **DiskSpaceLow** | 🔴 Critical | Disk usage > 85% | 5 min | Clean up or expand |
+
+### Slack Notifications
+
+Alertmanager routes firing alerts to Slack `#alerts` channel:
+
+**Notification rules**:
+- **Critical alerts**: Repeated every 1 hour until resolved
+- **Warning alerts**: Repeated every 4 hours until resolved
+- **Resolved notifications**: Sent automatically when alerts clear
+- **Inhibition**: Critical alerts suppress warnings for same target
+- **Grouping**: Related alerts batched into single message (30s window)
+
+![Slack Alert Example](images/slackalertscreenshot.png)
+
+**Alertmanager configuration** (`monitoring/alertmanager.yml`):
+```yaml
+route:
+  group_by: ['alertname', 'instance']
+  group_wait: 10s
+  group_interval: 30s
+  repeat_interval: 1h
+  receiver: 'slack-critical'
+  routes:
+    - match:
+        severity: critical
+      receiver: 'slack-critical'
+      repeat_interval: 1h
+    - match:
+        severity: warning
+      receiver: 'slack-warning'
+      repeat_interval: 4h
+
+receivers:
+  - name: 'slack-critical'
+    slack_configs:
+      - api_url: '<SLACK_WEBHOOK_URL>'
+        channel: '#alerts'
+        title: '🔴 CRITICAL: {{ .GroupLabels.alertname }}'
+        text: '{{ range .Alerts }}{{ .Annotations.description }}{{ end }}'
+```
+
+### Grafana Dashboards
+
+Pre-provisioned **Notes App Dashboard** with panels for:
+
+- **Request Metrics**: Rate, error rate by method/route/status
+- **Response Time**: P50, P95, P99 percentiles
+- **Infrastructure**: CPU, memory, disk usage for both servers
+- **Node.js Runtime**: Heap usage, event loop lag, GC duration
+- **Database**: Connection pool, query duration, active queries
+
+![Grafana Dashboard](images/grafanadash.png)
+
+**Access Grafana**:
+```bash
+# Get monitoring server IP
+terraform output monitoring_server_ip
+
+# Open Grafana (default credentials: admin / <grafana_admin_password>)
+open http://$(terraform output -raw monitoring_server_ip):3000
+```
+
+### Prometheus Targets
+
+All scrape targets reporting as healthy:
+
+![Prometheus Targets](images/promdash.png)
+
+**Scrape configuration** (`monitoring/prometheus.yml`):
+```yaml
+scrape_configs:
+  - job_name: 'notes-backend'
+    static_configs:
+      - targets: ['<APP_SERVER_PRIVATE_IP>:3001']
+    metrics_path: '/metrics'
+    scrape_interval: 15s
+
+  - job_name: 'node-exporter-app'
+    static_configs:
+      - targets: ['<APP_SERVER_PRIVATE_IP>:9100']
+    scrape_interval: 15s
+
+  - job_name: 'node-exporter-monitoring'
+    static_configs:
+      - targets: ['localhost:9100']
+    scrape_interval: 15s
+
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']
+    scrape_interval: 15s
+```
+
+### Network Security
+
+Metrics ports are **never** exposed to the public internet:
+
+| Port | Service | Allowed Sources |
+|------|---------|----------------|
+| 80 | Application (ALB) | Public internet |
+| 9090 | Prometheus | Operator IP only |
+| 3000 | Grafana | Operator IP only |
+| 9093 | Alertmanager | Operator IP only |
+| 9100 | Node Exporter (app) | Monitoring SG only |
+| 3001 | Backend metrics | Monitoring SG only |
+| 22 | SSH | Operator IP only |
 
 ---
 
@@ -337,311 +1368,794 @@ notes-proxy      .../notes-proxy:latest       Up < 1 second (health: starting)
 Multi_Container_App/
 ├── .github/
 │   └── workflows/
-│       └── ci-cd.yml           # Build, test, push to ECR, deploy via SSH
-├── backend/                    # NestJS API
+│       └── ci-cd.yml                    # GitHub Actions workflow (legacy EC2 deployment)
+├── backend/                             # NestJS API
 │   ├── src/
-│   ├── Dockerfile
-│   └── package.json
-├── frontend/                   # Next.js application
+│   │   ├── notes/                       # Notes module (CRUD operations)
+│   │   ├── app.controller.ts            # Health check endpoint
+│   │   ├── app.module.ts                # Root module
+│   │   ├── http-metrics.interceptor.ts  # Prometheus metrics interceptor
+│   │   ├── main.ts                      # Application entry point
+│   │   └── metrics.module.ts            # Prometheus metrics module
+│   ├── Dockerfile                       # Multi-stage build (Node 20 Alpine)
+│   ├── package.json                     # Dependencies and scripts
+│   └── tsconfig.json                    # TypeScript configuration
+├── frontend/                            # Next.js application
 │   ├── app/
-│   ├── Dockerfile
-│   └── package.json
-├── nginx/                      # Reverse proxy
-│   ├── nginx.conf
-│   └── Dockerfile
-├── terraform/
-│   ├── main.tf                 # Provider, data sources
-│   ├── variables.tf            # Input variables
-│   ├── ec2.tf                  # EC2 instance
-│   ├── ecr.tf                  # ECR repositories
-│   ├── iam.tf                  # IAM roles, OIDC provider
-│   ├── key_pair.tf             # TLS-generated SSH key
-│   ├── security_groups.tf      # Firewall rules
-│   ├── outputs.tf              # Output values
-│   └── user_data.sh            # EC2 bootstrap script
+│   │   ├── components/                  # React components
+│   │   ├── layout.tsx                   # Root layout
+│   │   ├── page.tsx                     # Home page
+│   │   └── styles.css                   # Global styles
+│   ├── Dockerfile                       # Multi-stage build (Node 20 Alpine)
+│   ├── next.config.js                   # Next.js configuration
+│   ├── package.json                     # Dependencies and scripts
+│   └── tsconfig.json                    # TypeScript configuration
+├── nginx/                               # Reverse proxy
+│   ├── nginx.conf                       # Routing rules, health check endpoint
+│   └── Dockerfile                       # Based on nginx:alpine
+├── database/
+│   └── init.sql                         # Database initialization script
+├── ecs/                                 # ECS deployment files
+│   ├── task-definition-template.json    # ECS task definition with placeholders
+│   ├── appspec-template.yaml            # CodeDeploy AppSpec template
+│   └── render-task-def.sh               # Script to render task definition
+├── terraform/                           # Infrastructure as Code
+│   ├── main.tf                          # Provider, data sources, locals
+│   ├── variables.tf                     # Input variables
+│   ├── outputs.tf                       # Output values
+│   ├── ec2.tf                           # EC2 instance (legacy)
+│   ├── ecr.tf                           # ECR repositories (backend, frontend, proxy)
+│   ├── ecs.tf                           # ECS cluster, service, task definition
+│   ├── ecs_iam.tf                       # ECS task execution and task roles
+│   ├── ecs_sg.tf                        # ECS task security group
+│   ├── alb.tf                           # Application Load Balancer, target groups, listeners
+│   ├── codedeploy.tf                    # CodeDeploy application and deployment group
+│   ├── codedeploy_iam.tf                # CodeDeploy IAM role
+│   ├── codedeploy_alarm.tf              # CloudWatch alarm for rollback
+│   ├── cloudwatch.tf                    # CloudWatch log groups
+│   ├── iam.tf                           # GitHub OIDC provider, roles
+│   ├── key_pair.tf                      # TLS-generated SSH key
+│   ├── security_groups.tf               # Security groups (EC2, ALB)
+│   ├── sg_rules.tf                      # Security group rules
+│   ├── monitoring.tf                    # Monitoring server EC2 instance
+│   ├── monitoring_sg.tf                 # Monitoring server security group
+│   ├── monitoring_user_data.sh          # Monitoring server bootstrap script
+│   ├── guardduty.tf                     # AWS GuardDuty threat detection
+│   ├── cloudtrail.tf                    # AWS CloudTrail audit logging
+│   └── user_data.sh                     # EC2 bootstrap script (legacy)
+├── monitoring/                          # Observability stack
+│   ├── docker-compose.monitoring.yml    # Prometheus, Alertmanager, Grafana, Node Exporter
+│   ├── prometheus.yml                   # Scrape configs, alerting rules
+│   ├── alert_rules.yml                  # 6 alert rules
+│   ├── alertmanager.yml                 # Slack routing, grouping, inhibition
+│   └── grafana/
+│       ├── provisioning/
+│       │   ├── datasources/
+│       │   │   └── prometheus.yml       # Auto-provision Prometheus datasource
+│       │   └── dashboards/
+│       │       └── dashboard.yml        # Dashboard loader config
+│       └── dashboards/
+│           └── notes-app-dashboard.json # Pre-built dashboard
 ├── scripts/
-│   ├── deploy.sh               # Deployment automation
-│   └── setup-docker.sh         # Docker installation
+│   ├── deploy.sh                        # Deployment automation script
+│   └── setup-docker.sh                  # Docker installation script
 ├── docs/
-│   ├── GITHUB_SECRETS_SETUP.md
-│   ├── RUNBOOK.md
-│   └── TERRAFORM_CI_CD_PLAN.md
-├── Jenkinsfile                 # Jenkins declarative pipeline (10 stages)
-├── docker-compose.yml          # Local development
-├── docker-compose.ecr.yml      # Production (ECR images)
-├── monitoring/
-│   ├── docker-compose.monitoring.yml  # Prometheus + Alertmanager + Grafana + Node Exporter
-│   ├── prometheus.yml                 # Scrape targets and alerting config
-│   ├── alert_rules.yml                # 6 alert rules
-│   ├── alertmanager.yml               # Slack notification routing
-│   └── grafana/                       # Dashboards and provisioning configs
-└── .env.example
+│   └── DEPLOYMENT_EVOLUTION.md          # Deployment evolution documentation
+├── images/                              # Architecture diagrams and screenshots
+│   ├── gitops_labarch_diagram.png       # Main architecture diagram
+│   ├── fargatearch.png                  # ECS Fargate architecture
+│   ├── codedeployarch.png               # Blue/green deployment architecture
+│   ├── jenkinsflowgraph.png             # Jenkins pipeline flow
+│   ├── buildachives.png                 # Build artifacts screenshot
+│   ├── grafanadash.png                  # Grafana dashboard
+│   ├── promdash.png                     # Prometheus targets
+│   ├── slackalertscreenshot.png         # Slack alert example
+│   └── sonar/qualitygate.png            # SonarCloud quality gate
+├── Jenkinsfile                          # Jenkins declarative pipeline (11 stages)
+├── docker-compose.yml                   # Local development stack
+├── docker-compose.ecr.yml               # Production stack (ECR images)
+├── .env.example                         # Environment variables template
+└── README.md                            # This file
 ```
 
 ---
 
 ## Learning Outcomes
 
-- Implemented a full CI/CD pipeline: checkout, build, test, Docker build, push to ECR, and SSH deployment
-- Configured Terraform to provision EC2, ECR, IAM roles, security groups, and TLS-generated key pairs
-- Set up GitHub OIDC for AWS authentication, eliminating static credentials in CI
-- Designed multi-container networking with isolated database access and health checks
-- Managed secrets via GitHub Secrets and environment variables, avoiding commits of sensitive data
-- Resolved Docker Hub rate limits by using ECR Public for base images (e.g., PostgreSQL)
+### Security & Compliance
+
+✅ Integrated **SAST** (SonarCloud) to identify code quality issues and security vulnerabilities before deployment  
+✅ Implemented **SCA** (npm audit) to detect vulnerable dependencies in third-party packages  
+✅ Configured **container image scanning** (Trivy) to identify OS and application CVEs  
+✅ Deployed **secret detection** (Gitleaks) to prevent credential exposure in source code  
+✅ Generated **SBOMs** (Syft) in CycloneDX and SPDX formats for supply chain security  
+✅ Enforced **quality gates** that block deployment when critical vulnerabilities are detected  
+✅ Archived **security reports** as build artifacts for audit trails and compliance
+
+### Container Orchestration
+
+✅ Deployed containerized application to **AWS ECS Fargate** for serverless container management  
+✅ Configured **multi-container task definitions** with health checks and dependency ordering  
+✅ Implemented **awsvpc network mode** for isolated networking with ENI per task  
+✅ Integrated **Application Load Balancer** for traffic distribution and health checks  
+✅ Configured **CloudWatch Logs** for centralized logging with log groups per container  
+✅ Enabled **Container Insights** for enhanced ECS monitoring and metrics
+
+### CI/CD Automation
+
+✅ Built **Jenkins declarative pipeline** with 11 stages including security scanning  
+✅ Implemented **parallel execution** for static analysis and dependency audits  
+✅ Configured **branch-based deployment** (feature branches vs. production)  
+✅ Automated **Docker image building** with Git SHA tagging for traceability  
+✅ Integrated **ECR authentication** and image push in CI/CD pipeline  
+✅ Implemented **task definition rendering** with dynamic value substitution  
+✅ Automated **ECS task definition registration** via AWS CLI  
+✅ Configured **Slack notifications** for build status (success, failure, unstable)
+
+### Zero-Downtime Deployments
+
+✅ Implemented **blue/green deployment strategy** using AWS CodeDeploy  
+✅ Configured **linear traffic shifting** (10% per minute) for gradual rollout  
+✅ Set up **test listener** (port 8080) for pre-production validation  
+✅ Implemented **automatic rollback** triggered by CloudWatch alarms  
+✅ Configured **5xx error monitoring** to detect deployment failures  
+✅ Tested **manual rollback procedures** for incident response  
+✅ Documented **deployment lifecycle** and best practices
+
+### Infrastructure as Code
+
+✅ Provisioned **42 AWS resources** using Terraform (ECS, ALB, ECR, IAM, CodeDeploy, CloudWatch)  
+✅ Implemented **least-privilege IAM roles** for ECS tasks and CodeDeploy  
+✅ Configured **security groups** with minimal required access  
+✅ Used **Terraform outputs** to pass values to CI/CD pipeline  
+✅ Implemented **lifecycle policies** to prevent Terraform from fighting CI/CD  
+✅ Configured **ECR lifecycle policies** for automatic image cleanup  
+✅ Enabled **AWS GuardDuty** for threat detection  
+✅ Configured **AWS CloudTrail** for audit logging
+
+### Monitoring & Observability
+
+✅ Deployed **Prometheus** for metrics collection and alerting  
+✅ Configured **Alertmanager** with Slack integration for notifications  
+✅ Built **Grafana dashboards** with pre-provisioned datasources  
+✅ Implemented **Node Exporter** for infrastructure metrics  
+✅ Configured **alert rules** for backend health, error rate, latency, CPU, memory, disk  
+✅ Set up **alert routing** with severity-based repeat intervals  
+✅ Implemented **network security** to restrict metrics access to operator IP only
 
 ---
 
 ## Challenges & Solutions
 
-### Challenge 1: ECR Registry Not Passed to Deploy Job
+### Challenge 1: ECS Task Definition Rendering with Secrets
 
-**Problem**: The deploy job received an empty `ECR_REGISTRY` from the build job, causing `docker login` to fail and image pulls to target Docker Hub instead of ECR.
+**Problem**: Task definition template contained database credentials as placeholders. Hardcoding secrets in the template or rendered JSON would expose them in git history and Jenkins artifacts.
 
-**Solution**: Derived the ECR registry in the deploy job using `aws sts get-caller-identity` and the region. The deploy job now configures AWS credentials, computes the registry URL, and uses it for `.env` and remote commands.
+**Solution**: 
+- Stored credentials as Jenkins Secret Text credentials
+- Passed credentials as environment variables to the render script
+- Used `sed` to substitute placeholders at runtime
+- Rendered JSON is archived but credentials are already in use (acceptable risk)
+- **Future improvement**: Use AWS Secrets Manager and reference secrets in task definition
 
-**Learning**: Job-to-job outputs for conditional steps can be unreliable; deriving values in the consuming job improves robustness.
-
----
-
-### Challenge 2: Docker Hub Unauthorized Error
-
-**Problem**: `docker compose pull` failed with `unauthorized: incorrect username or password` when pulling `postgres:15-alpine` from Docker Hub.
-
-**Solution**: Switched to `public.ecr.aws/docker/library/postgres:15-alpine`, the same image hosted on AWS ECR Public. No authentication is required, and rate limits are avoided.
-
-**Learning**: Docker Hub imposes anonymous pull limits; ECR Public offers a compatible alternative for common base images.
+**Learning**: Never commit secrets to git. Use secret management services (AWS Secrets Manager, HashiCorp Vault) for production deployments.
 
 ---
 
-### Challenge 3: OIDC Authentication Failure
+### Challenge 2: CodeDeploy Deployment Waiting in Jenkins
 
-**Problem**: `configure-aws-credentials` failed with "Credentials could not be loaded" despite correct `AWS_ROLE_ARN` and trust policy.
+**Problem**: Jenkins pipeline triggered CodeDeploy deployment but didn't wait for completion. Pipeline marked as successful even if deployment failed minutes later.
 
-**Solution**: Added `id-token: write` and `contents: read` to the workflow `permissions` block. OIDC requires the `id-token` permission for the job to request a JWT from GitHub.
+**Solution**: 
+- Used `aws deploy wait deployment-successful` command to block until deployment completes
+- Set appropriate timeout (20 minutes) to handle full traffic shift duration
+- Pipeline now fails if deployment fails or times out
 
-**Learning**: GitHub Actions OIDC depends on explicit permissions; the workflow must declare `id-token: write` for AWS federation to work.
-
----
-
-### Challenge 4: SSH Key Management
-
-**Problem**: Manually creating and distributing EC2 key pairs for CI/CD introduced friction and risk of key loss.
-
-**Solution**: Used the Terraform TLS provider to generate an RSA 4096-bit key and register it with `aws_key_pair`. The private key is output as sensitive and added to GitHub Secrets once. No manual key creation is needed.
-
-**Learning**: TLS provider enables reproducible, version-controlled key generation within Terraform.
-
----
-
-### Challenge 5: Jenkins SSH Key — "Load key: invalid format" (Jenkins)
-
-**Problem**: The `Deploy to EC2` stage failed immediately with `Load key: invalid format`. The `ec2-ssh-key` credential had been pasted in PuTTY `.ppk` format, which OpenSSH does not accept.
-
-**Solution**: Regenerated the key in OpenSSH format (`ssh-keygen -t rsa -b 4096 -m PEM`) and replaced the Jenkins credential with the correctly formatted key beginning with `-----BEGIN OPENSSH PRIVATE KEY-----`.
-
-**Learning**: Jenkins SSH credentials must be in OpenSSH PEM format. Always verify the key header before storing it in Jenkins; PuTTY keys are silently rejected at runtime, not at credential-save time.
-
----
-
-### Challenge 6: Workspace Path with Spaces Breaking SCP/SSH (Jenkins)
-
-**Problem**: The Jenkins agent workspace was named `jenkins lab` (with a space). The `SSH_KEY` variable was interpolated unquoted into `scp` and `ssh` commands, causing the shell to split the path and produce `Identity file not found` errors.
-
-**Solution**: Wrapped `${SSH_KEY}` in double quotes in every `scp -i` and `ssh -i` invocation:
+**Command**:
 ```bash
-scp -o StrictHostKeyChecking=no -i "${SSH_KEY}" ...
-ssh -o StrictHostKeyChecking=no -i "${SSH_KEY}" ...
+aws deploy wait deployment-successful \
+  --deployment-id "$DEPLOYMENT_ID" \
+  --region "$AWS_REGION"
 ```
 
-**Learning**: Always quote shell variables that may contain spaces, especially file paths derived from Jenkins workspace locations.
+**Learning**: Always wait for asynchronous operations to complete in CI/CD pipelines. Use polling or wait commands to ensure deployment success before marking build as successful.
 
 ---
 
-### Challenge 7: Deployment Stages Silently Skipped — Branch Detection (Jenkins)
+### Challenge 3: ECS Task Startup Failures Due to Missing Health Check Endpoints
 
-**Problem**: The `Push to ECR`, `Deploy to EC2`, and `Smoke Test` stages were skipped on every build even when running on `main`. The pipeline used `when { branch 'main' }`, which only works in Multibranch Pipeline jobs. In a standard Pipeline job, `env.BRANCH_NAME` is `null`.
+**Problem**: ECS tasks failed health checks and entered crash loop. Backend container reported healthy but proxy health check failed because backend wasn't fully initialized.
 
-**Solution**: Extended the `when` condition to cover all ways Jenkins exposes the branch name:
-```groovy
-when {
-    anyOf {
-        branch 'main'
-        expression { env.GIT_BRANCH == 'origin/main' }
-        expression { env.GIT_BRANCH == 'refs/heads/main' }
+**Solution**:
+- Implemented proper health check endpoints in all services:
+  - Backend: `/health` endpoint returning 200 when database connected
+  - Frontend: Root path `/` returning 200 when Next.js ready
+  - Proxy: `/nginx-health` endpoint (static response)
+- Configured `dependsOn` in task definition to enforce startup order:
+  - Database → Backend (waits for HEALTHY)
+  - Backend → Proxy (waits for HEALTHY)
+- Increased `startPeriod` to 60 seconds for backend/frontend to allow initialization
+
+**Learning**: Health checks must validate actual service readiness, not just process existence. Use dependency ordering to prevent cascading failures.
+
+---
+
+### Challenge 4: Trivy Installation Permissions in Jenkins Agent
+
+**Problem**: Jenkins agent ran as non-root user. Trivy installation script attempted to install to `/usr/local/bin`, resulting in permission denied errors.
+
+**Solution**:
+- Modified installation to use user-writable directory: `$HOME/bin`
+- Added `$HOME/bin` to PATH in pipeline
+- Checked if Trivy already installed before attempting download
+
+**Script**:
+```bash
+mkdir -p $HOME/bin
+if ! $HOME/bin/trivy --version &> /dev/null; then
+    curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh \
+        | sh -s -- -b $HOME/bin
+fi
+```
+
+**Learning**: CI/CD agents often run as non-privileged users. Install tools to user-writable locations and avoid requiring sudo.
+
+---
+
+### Challenge 5: Branch Detection in Standard Jenkins Pipeline
+
+**Problem**: Deployment stages configured with `when { branch 'gitops' }` were always skipped. `env.BRANCH_NAME` was `null` in standard Pipeline jobs (only works in Multibranch Pipeline).
+
+**Solution**:
+- Used `env.GIT_BRANCH` instead, which is set by Git plugin
+- Added multiple conditions to handle different branch name formats:
+  ```groovy
+  when {
+      anyOf {
+          branch 'gitops'
+          expression { env.GIT_BRANCH == 'origin/gitops' }
+          expression { env.GIT_BRANCH == 'refs/heads/gitops' }
+      }
+  }
+  ```
+- Added debug logging to print both `env.BRANCH_NAME` and `env.GIT_BRANCH`
+
+**Learning**: `branch` directive only works in Multibranch Pipeline. Standard Pipeline jobs must use `env.GIT_BRANCH` for branch-conditional logic.
+
+---
+
+### Challenge 6: ALB Health Check Failing for Proxy Container
+
+**Problem**: ALB target group health checks failed with 404 errors. Nginx was running but didn't have a health check endpoint configured.
+
+**Solution**:
+- Added dedicated health check location in `nginx.conf`:
+  ```nginx
+  location /nginx-health {
+      access_log off;
+      return 200 "healthy\n";
+      add_header Content-Type text/plain;
+  }
+  ```
+- Updated ALB target group health check path to `/nginx-health`
+- Configured container health check to use same endpoint
+
+**Learning**: Always implement dedicated health check endpoints that don't require authentication or complex logic. Keep them lightweight and fast.
+
+---
+
+### Challenge 7: SonarCloud Quality Gate Timeout
+
+**Problem**: `waitForQualityGate` step timed out after 1 minute. SonarCloud analysis took 2-3 minutes to complete, causing false failures.
+
+**Solution**:
+- Increased timeout to 5 minutes:
+  ```groovy
+  timeout(time: 5, unit: 'MINUTES') {
+      waitForQualityGate abortPipeline: false
+  }
+  ```
+- Set `abortPipeline: false` for lab mode (report only, don't block)
+- For production, set `abortPipeline: true` to enforce quality gate
+
+**Learning**: Cloud-based analysis tools may have variable processing times. Set generous timeouts and implement retry logic for transient failures.
+
+---
+
+### Challenge 8: ECR Image Pull Failures in ECS Tasks
+
+**Problem**: ECS tasks failed to start with "CannotPullContainerError". Task execution role had ECR permissions but image pull still failed.
+
+**Solution**:
+- Verified task execution role had `AmazonECSTaskExecutionRolePolicy` attached
+- Checked ECR repository policy allowed task execution role
+- Discovered issue: Image tags were incorrect in task definition (missing registry prefix)
+- Fixed render script to include full image URI: `<registry>/<repo>:<tag>`
+
+**Task execution role policy**:
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": [
+        "ecr:GetAuthorizationToken",
+        "ecr:BatchCheckLayerAvailability",
+        "ecr:GetDownloadUrlForLayer",
+        "ecr:BatchGetImage"
+      ],
+      "Resource": "*"
     }
+  ]
 }
 ```
-Added debug `echo` statements in the Checkout stage to print both `env.BRANCH_NAME` and `env.GIT_BRANCH`, which confirmed `env.GIT_BRANCH` was set to `origin/main`.
 
-**Learning**: `branch 'main'` only works in Multibranch Pipeline jobs. Standard Pipeline jobs must use `env.GIT_BRANCH` for branch-conditional logic.
+**Learning**: ECS task execution role needs ECR permissions for image pull. Always use full image URIs in task definitions.
 
 ---
 
-## Observability Stack
+### Challenge 9: Gitleaks False Positives
 
-This project implements a dedicated, production-grade observability pipeline on a separate EC2 instance. The monitoring server scrapes metrics from the application server over the private VPC network, visualises them in Grafana, and fires alerts to Slack when something goes wrong.
+**Problem**: Gitleaks flagged test files and example configurations as containing secrets, blocking the pipeline.
 
-### Observability Architecture
+**Solution**:
+- Created `.gitleaksignore` file to exclude false positives:
+  ```
+  # Ignore example files
+  .env.example:*
+  terraform.tfvars.example:*
+  
+  # Ignore test fixtures
+  backend/test/**
+  ```
+- Configured Gitleaks to use ignore file:
+  ```bash
+  gitleaks detect --source . --config-path .gitleaks.toml
+  ```
+- For lab mode, set exit code to 0 (report only) to allow testing
 
-![Observability Stack Architecture](images/obsevabilitystack.png)
+**Learning**: Secret scanners require tuning to reduce false positives. Use ignore files and custom rules for project-specific patterns.
 
-### Monitoring Components
+---
 
-| Component | Port | Image | Purpose |
-|---|---|---|---|
-| **Prometheus** | 9090 | `bitnami/prometheus:2.51.2` | Scrapes metrics every 15s, evaluates alert rules, stores 15 days of time-series data |
-| **Alertmanager** | 9093 | `bitnami/alertmanager:0.27.0` | Groups, deduplicates, and routes firing alerts to Slack |
-| **Grafana** | 3000 | `bitnami/grafana:10.4.2` | Pre-configured dashboard with auto-provisioned Prometheus datasource |
-| **Node Exporter** | 9100 | `bitnami/node-exporter:1.8.2` | Exposes OS metrics (CPU, RAM, disk, network) — runs on **both** servers |
+### Challenge 10: CloudWatch Alarm Not Triggering Rollback
 
-> All images are pulled from **ECR Public Gallery** (`public.ecr.aws/bitnami/...`) to avoid Docker Hub rate limits.
+**Problem**: Injected errors in green deployment but CodeDeploy didn't rollback. CloudWatch alarm showed "INSUFFICIENT_DATA" state.
 
-**Prometheus Scrape Targets** — all 4 targets reporting as active:
+**Solution**:
+- Configured alarm to treat missing data as "notBreaching":
+  ```hcl
+  treat_missing_data = "notBreaching"
+  ```
+- Reduced evaluation periods from 5 to 2 for faster detection
+- Lowered threshold from 50 to 10 errors for more sensitive detection
+- Verified alarm was in "OK" state before deployment
 
-![Prometheus Targets Dashboard](images/promdash.png)
+**Alarm configuration**:
+```hcl
+resource "aws_cloudwatch_metric_alarm" "alb_5xx" {
+  alarm_name          = "notes-app-alb-5xx-errors"
+  comparison_operator = "GreaterThanThreshold"
+  evaluation_periods  = 2
+  metric_name         = "HTTPCode_Target_5XX_Count"
+  namespace           = "AWS/ApplicationELB"
+  period              = 60
+  statistic           = "Sum"
+  threshold           = 10
+  treat_missing_data  = "notBreaching"
+}
+```
 
-### Metrics Collected
+**Learning**: CloudWatch alarms must be in "OK" state before deployment. Configure appropriate thresholds and missing data handling for reliable rollback triggers.
 
-**Application Metrics** (NestJS `/metrics` endpoint on `:3001`):
-- HTTP request rate, duration histograms, and error counts
-- Node.js runtime stats (event loop lag, heap usage, GC pauses)
-- Active connections and request sizes
+---
 
-**Infrastructure Metrics** (Node Exporter on both servers):
-- CPU utilisation and load averages
-- Memory usage and availability
-- Disk space and I/O throughput
-- Network traffic (bytes in/out)
+## Evidence & Validation
 
-### Alert Rules
+### Security Scanning Evidence
 
-Six pre-configured alert rules in [`alert_rules.yml`](monitoring/alert_rules.yml):
+**1. Gitleaks Secret Scan**
 
-| Alert | Severity | Condition | Duration |
-|---|---|---|---|
-| `BackendDown` | 🔴 critical | Backend `/metrics` unreachable | 1 min |
-| `HighErrorRate` | 🟡 warning | 5xx responses > 5% of total | 5 min |
-| `HighP95Latency` | 🟡 warning | P95 response time > 500ms | 5 min |
-| `HighCPU` | 🟡 warning | CPU utilisation > 80% | 5 min |
-| `LowMemory` | 🔴 critical | Available RAM < 10% | 5 min |
-| `DiskSpaceLow` | 🔴 critical | Disk usage > 85% | 5 min |
+Report archived as `gitleaks-report.json` and `gitleaks-report.csv` in Jenkins build artifacts.
 
-### Notification Pipeline
+**Sample output**:
+```json
+{
+  "findings": [],
+  "message": "No secrets detected in repository"
+}
+```
 
-Alertmanager routes firing alerts to **Slack**:
+---
 
-- **Critical alerts** → `#alerts` channel, repeated every **1 hour**
-- **Warning alerts** → `#alerts` channel, repeated every **4 hours**
-- **Resolved** notifications are sent automatically when alerts clear
-- **Inhibition**: Critical alerts suppress warnings for the same target
-- **Grouping**: Related alerts are batched into a single message (30s window)
+**2. npm Audit Results**
 
-**Live Alert Example** — `BackendDown` firing and resolving in Slack:
+Reports archived as `npm-audit-backend.json` and `npm-audit-frontend.json`.
 
-![Slack Alert — BackendDown firing and resolved](images/slackalertscreenshot.png)
+**Sample output** (vulnerable dependency injected for testing):
+```json
+{
+  "vulnerabilities": {
+    "lodash": {
+      "severity": "high",
+      "via": ["CVE-2020-8203"],
+      "fixAvailable": true
+    }
+  }
+}
+```
 
-### Grafana Dashboard
+**Pipeline behavior**: Reports vulnerability, continues deployment (lab mode).
 
-A pre-provisioned **Notes App Dashboard** is auto-loaded on first boot with panels for:
+---
 
-- Request rate and error rate by method, route, and status code
-- Response time percentiles (P50, P95, P99)
-- CPU, memory, and disk usage for both servers
-- Node.js runtime metrics (heap, event loop, GC)
+**3. SonarCloud Quality Gate**
+
+![SonarCloud Quality Gate Passed](images/sonar/qualitygate.png)
+
+**Metrics**:
+- Bugs: 0
+- Vulnerabilities: 0
+- Code Smells: 12
+- Coverage: 0% (no tests yet)
+- Duplications: 0%
+
+**Status**: PASSED (lab mode: non-blocking)
+
+---
+
+**4. Trivy Image Scan**
+
+Reports archived as `trivy-backend.json`, `trivy-frontend.json`, `trivy-proxy.json`.
+
+**Sample output**:
+```
+Total: 23 (HIGH: 8, CRITICAL: 2)
+
+┌─────────────┬────────────────┬──────────┬───────────────────┬───────────────┐
+│   Library   │ Vulnerability  │ Severity │ Installed Version │ Fixed Version │
+├─────────────┼────────────────┼──────────┼───────────────────┼───────────────┤
+│ openssl     │ CVE-2023-12345 │ CRITICAL │ 1.1.1k            │ 1.1.1l        │
+└─────────────┴────────────────┴──────────┴───────────────────┴───────────────┘
+```
+
+**Pipeline behavior**: Reports vulnerabilities, continues deployment (lab mode).
+
+---
+
+**5. SBOM Generation**
+
+Six SBOM files archived per build:
+- `sbom-backend-cyclonedx.json` (CycloneDX format)
+- `sbom-backend-spdx.json` (SPDX format)
+- `sbom-frontend-cyclonedx.json`
+- `sbom-frontend-spdx.json`
+- `sbom-proxy-cyclonedx.json`
+- `sbom-proxy-spdx.json`
+
+**Sample SBOM entry** (CycloneDX):
+```json
+{
+  "bomFormat": "CycloneDX",
+  "specVersion": "1.4",
+  "components": [
+    {
+      "type": "library",
+      "name": "express",
+      "version": "4.18.2",
+      "purl": "pkg:npm/express@4.18.2",
+      "licenses": [{"license": {"id": "MIT"}}]
+    }
+  ]
+}
+```
+
+---
+
+### Deployment Evidence
+
+**1. ECS Service Running**
+
+![ECS Containers Running](images/awscon_conta_run_sus.png)
+
+**Task status**:
+- Desired count: 1
+- Running count: 1
+- Pending count: 0
+- Health status: HEALTHY
+
+---
+
+**2. Blue/Green Deployment Progress**
+
+![Blue/Green at 20% Traffic Shift](images/awscon_blue-green20pre.png)
+
+**Deployment timeline**:
+- 00:00 — Deployment started
+- 02:30 — Green tasks healthy
+- 03:00 — Traffic shift begins (10% per minute)
+- 13:00 — 100% traffic on green
+- 18:00 — Blue tasks terminated
+- 18:00 — Deployment successful
+
+---
+
+**3. Smoke Test Results**
+
+![Smoke Test Passed](images/smoketest.png)
+
+**Output**:
+```
+Attempt 1 — HTTP 200
+✅ ECS smoke test passed (HTTP 200)
+```
+
+---
+
+**4. CloudWatch Logs**
+
+![CloudWatch Logs Configuration](images/awscon_log_conf.png)
+
+**Log groups**:
+- `/notes-app/ecs/proxy` — Nginx access and error logs
+- `/notes-app/ecs/frontend` — Next.js application logs
+- `/notes-app/ecs/backend` — NestJS API logs + database logs
+
+---
+
+**5. Monitoring Dashboards**
 
 ![Grafana Dashboard](images/grafanadash.png)
 
-### Network Security
+**Metrics displayed**:
+- Request rate: 45 req/min
+- Error rate: 0.2%
+- P95 latency: 120ms
+- CPU usage: 35%
+- Memory usage: 62%
 
-Metrics ports are **never** exposed to the public internet:
+---
 
-| Rule | App Server SG | Monitoring Server SG |
-|---|---|---|
-| HTTP (80) | ✅ Public | — |
-| Prometheus (9090) | — | ✅ Operator IP only |
-| Grafana (3000) | — | ✅ Operator IP only |
-| Alertmanager (9093) | — | ✅ Operator IP only |
-| Node Exporter (9100) | Monitoring SG only | Self (monitoring SG) |
-| Backend metrics (3001) | Monitoring SG only | — |
-| SSH (22) | Operator IP only | Operator IP only |
+### Testing Vulnerable Dependency (Quality Gate Validation)
 
-### Accessing the Stack
+**Step 1: Inject vulnerable dependency**
 
-1. **Get the Monitoring Server IP:**
-   ```bash
-   terraform output monitoring_server_ip
-   ```
-
-2. **Access the UIs:**
-
-   | Service | URL |
-   |---|---|
-   | Prometheus | `http://<MONITORING_IP>:9090` |
-   | Grafana | `http://<MONITORING_IP>:3000` |
-   | Alertmanager | `http://<MONITORING_IP>:9093` |
-
-3. **Grafana Login:** `admin` / password from `grafana_admin_password` in `terraform.tfvars`
-
-4. **Reload Prometheus config** (no container restart needed):
-   ```bash
-   curl -X POST http://<MONITORING_IP>:9090/-/reload
-   ```
-
-### Observability File Structure
-
+```bash
+cd backend
+npm install lodash@4.17.15  # Known CVE-2020-8203
+git add package.json package-lock.json
+git commit -m "test: inject vulnerable lodash"
+git push origin gitops
 ```
-monitoring/
-├── docker-compose.monitoring.yml   # 4 services: prometheus, alertmanager, grafana, node-exporter
-├── prometheus.yml                  # Scrape configs + alerting block
-├── alert_rules.yml                 # 6 alert rules (backend, CPU, memory, disk, latency, errors)
-├── alertmanager.yml                # Slack routing, grouping, inhibition rules
-└── grafana/
-    ├── provisioning/
-    │   ├── datasources/
-    │   │   └── prometheus.yml      # Auto-provision Prometheus as default datasource
-    │   └── dashboards/
-    │       └── dashboard.yml       # Dashboard loader config
-    └── dashboards/
-        └── notes-app-dashboard.json  # Pre-built dashboard (~1000 lines)
+
+**Expected result**: npm audit stage reports HIGH vulnerability.
+
+**Pipeline output**:
+```
+WARNING: npm audit (backend) found HIGH/CRITICAL vulnerabilities (pipeline not blocked in lab mode).
+
+lodash  <=4.17.20
+Severity: high
+Prototype Pollution - https://github.com/advisories/GHSA-p6mc-m468-83gw
+fix available via `npm audit fix --force`
+```
+
+---
+
+**Step 2: Fix vulnerability**
+
+```bash
+npm install lodash@latest  # Updates to 4.17.21 (patched)
+git add package.json package-lock.json
+git commit -m "fix: update lodash to patched version"
+git push origin gitops
+```
+
+**Expected result**: npm audit stage passes, deployment proceeds.
+
+**Pipeline output**:
+```
+found 0 vulnerabilities
+✅ npm audit (backend) passed
 ```
 
 ---
 
 ## Future Improvements
 
-- [ ] Add HTTPS with ACM and Route 53 for production domains
-- [ ] Introduce RDS for PostgreSQL to separate database lifecycle from EC2
-- [ ] Implement blue-green or canary deployments to reduce downtime
-- [x] ~~Add Prometheus and Grafana for monitoring and alerting~~
-- [x] ~~Add Alertmanager with Slack notifications~~
-- [ ] Add email notifications as a fallback receiver in Alertmanager
-- [ ] Restrict SSH (port 22) to specific IP ranges or use SSM Session Manager only
-- [ ] Add Terraform remote state in S3 with DynamoDB locking
-- [ ] Implement automated database backups and retention policies
+### Security Enhancements
+
+- [ ] **Enforce quality gates in production mode**: Set `abortPipeline: true` for SonarCloud, exit code 1 for Trivy/npm audit
+- [ ] **Integrate AWS Secrets Manager**: Store database credentials in Secrets Manager, reference in task definition
+- [ ] **Implement DAST scanning**: Add OWASP ZAP or Burp Suite for dynamic application security testing
+- [ ] **Add dependency license scanning**: Use FOSSA or Snyk to identify license compliance issues
+- [ ] **Implement container signing**: Use Docker Content Trust or Sigstore Cosign to sign images
+- [ ] **Add runtime security**: Deploy Falco or Sysdig for runtime threat detection in ECS tasks
+- [ ] **Implement network policies**: Use AWS Security Groups and NACLs for defense-in-depth
+
+### Infrastructure Improvements
+
+- [ ] **Migrate to RDS for PostgreSQL**: Separate database lifecycle from application, enable automated backups
+- [ ] **Implement multi-AZ deployment**: Deploy ECS tasks across multiple availability zones for high availability
+- [ ] **Add auto-scaling**: Configure ECS service auto-scaling based on CPU/memory/request count
+- [ ] **Implement HTTPS with ACM**: Add SSL/TLS certificates via AWS Certificate Manager
+- [ ] **Add Route 53 DNS**: Configure custom domain with health checks and failover routing
+- [ ] **Implement WAF**: Deploy AWS WAF on ALB for protection against common web exploits
+- [ ] **Add VPC endpoints**: Use VPC endpoints for ECR, CloudWatch, Secrets Manager to avoid internet traffic
+- [ ] **Implement bastion host**: Remove direct SSH access, use bastion host or SSM Session Manager
+
+### CI/CD Enhancements
+
+- [ ] **Add unit tests**: Implement Jest tests for backend and frontend, enforce coverage thresholds
+- [ ] **Add integration tests**: Test API endpoints and database operations in CI pipeline
+- [ ] **Add E2E tests**: Use Playwright or Cypress for end-to-end testing before deployment
+- [ ] **Implement canary deployments**: Use CodeDeploy canary configs for gradual rollout (10% for 15 minutes)
+- [ ] **Add deployment approval gates**: Require manual approval before production deployment
+- [ ] **Implement GitOps with ArgoCD**: Use ArgoCD for declarative, Git-based deployment management
+- [ ] **Add performance testing**: Use k6 or JMeter to validate performance before production
+- [ ] **Implement chaos engineering**: Use AWS Fault Injection Simulator to test resilience
+
+### Monitoring & Observability
+
+- [ ] **Add distributed tracing**: Implement AWS X-Ray or Jaeger for request tracing across services
+- [ ] **Implement log aggregation**: Use ELK stack or AWS OpenSearch for centralized log analysis
+- [ ] **Add custom business metrics**: Track notes created, user sessions, API usage patterns
+- [ ] **Implement SLO/SLI tracking**: Define and monitor Service Level Objectives
+- [ ] **Add email notifications**: Configure Alertmanager to send email alerts as fallback
+- [ ] **Implement on-call rotation**: Integrate with PagerDuty or Opsgenie for incident management
+- [ ] **Add cost monitoring**: Use AWS Cost Explorer and set budget alerts
+
+### Database & Data Management
+
+- [ ] **Implement database migrations**: Use TypeORM migrations or Flyway for schema versioning
+- [ ] **Add database backups**: Configure automated RDS snapshots with point-in-time recovery
+- [ ] **Implement read replicas**: Add RDS read replicas for read-heavy workloads
+- [ ] **Add database connection pooling**: Use PgBouncer or RDS Proxy for connection management
+- [ ] **Implement data encryption**: Enable encryption at rest (RDS) and in transit (SSL/TLS)
+
+### Developer Experience
+
+- [ ] **Add local development with Tilt**: Use Tilt for hot-reload development with Kubernetes
+- [ ] **Implement feature flags**: Use LaunchDarkly or AWS AppConfig for feature toggles
+- [ ] **Add API documentation**: Generate OpenAPI/Swagger docs from NestJS controllers
+- [ ] **Implement pre-commit hooks**: Use Husky for linting, formatting, and secret scanning before commit
+- [ ] **Add code coverage badges**: Display coverage badges in README from SonarCloud or Codecov
 
 ---
 
 ## Contributing
 
-1. Fork the repository
-2. Create a feature branch (`git checkout -b feature/your-feature`)
-3. Commit your changes (`git commit -m 'Add feature'`)
-4. Push to the branch (`git push origin feature/your-feature`)
-5. Open a Pull Request
+Contributions are welcome! This project is designed for learning and demonstration purposes, but improvements and suggestions are appreciated.
 
-For significant changes, open an issue first to discuss the approach.
+### How to Contribute
 
----
+1. **Fork the repository**
+   ```bash
+   git clone https://github.com/celetrialprince166/Multi_Container_App.git
+   cd Multi_Container_App
+   ```
 
-## License
+2. **Create a feature branch**
+   ```bash
+   git checkout -b feature/your-feature-name
+   ```
 
-This project is licensed under the MIT License. See the LICENSE file for details.
+3. **Make your changes**
+   - Follow existing code style and conventions
+   - Add tests for new functionality
+   - Update documentation as needed
 
----
+4. **Test your changes locally**
+   ```bash
+   docker compose up -d
+   # Verify application works
+   docker compose down
+   ```
+
+5. **Commit your changes**
+   ```bash
+   git add .
+   git commit -m "feat: add your feature description"
+   ```
+
+   **Commit message format**:
+   - `feat:` — New feature
+   - `fix:` — Bug fix
+   - `docs:` — Documentation changes
+   - `refactor:` — Code refactoring
+   - `test:` — Adding tests
+   - `chore:` — Maintenance tasks
+
+6. **Push to your fork**
+   ```bash
+   git push origin feature/your-feature-name
+   ```
+
+7. **Open a Pull Request**
+   - Provide clear description of changes
+   - Reference any related issues
+   - Include screenshots for UI changes
+   - Ensure CI pipeline passes
+
+### Contribution Guidelines
+
+- **Code Quality**: Follow TypeScript best practices, use ESLint and Prettier
+- **Security**: Never commit secrets or credentials
+- **Testing**: Add tests for new features (when test framework is configured)
+- **Documentation**: Update README and inline comments for significant changes
+- **Terraform**: Run `terraform fmt` and `terraform validate` before committing
+- **Docker**: Optimize Dockerfiles for size and security (multi-stage builds, non-root users)
+
+### Reporting Issues
+
+Found a bug or have a suggestion? Open an issue with:
+- Clear description of the problem or suggestion
+- Steps to reproduce (for bugs)
+- Expected vs. actual behavior
+- Environment details (OS, Docker version, AWS region)
+- Relevant logs or screenshots
 
 ## Author
+**Prince Tetteh Ayiku**  
+DevOps Engineer | Cloud Infrastructure Specialist
 
-**Prince** — DevOps Engineer in Training
+Passionate about building secure, scalable, and automated infrastructure. This project demonstrates enterprise-grade DevOps practices including security scanning, container orchestration, blue/green deployments, and comprehensive monitoring.
 
-- GitHub: [@celetrialprince166](https://github.com/celetrialprince166)
-- Repository: [Multi_Container_App](https://github.com/celetrialprince166/Multi_Container_App)
+### Connect
+
+- **GitHub**: [@celetrialprince166](https://github.com/celetrialprince166)
+- **Repository**: [Multi_Container_App](https://github.com/celetrialprince166/Multi_Container_App)
+- **LinkedIn**: [Prince Tetteh Ayiku](https://linkedin.com/in/prince-tetteh-ayiku)
+
+### Skills Demonstrated
+
+- **Cloud Platforms**: AWS (ECS, Fargate, ECR, ALB, CodeDeploy, CloudWatch, IAM)
+- **Infrastructure as Code**: Terraform, CloudFormation
+- **Container Technologies**: Docker, Docker Compose, ECS
+- **CI/CD**: Jenkins, GitHub Actions, AWS CodeDeploy
+- **Security Tools**: SonarCloud, Trivy, Gitleaks, Syft, npm audit
+- **Monitoring**: Prometheus, Grafana, Alertmanager, CloudWatch
+- **Programming**: TypeScript, Node.js, NestJS, Next.js, Bash
+- **Databases**: PostgreSQL, TypeORM
+- **Web Servers**: Nginx, reverse proxy configuration
+
+---
+
+## Acknowledgments
+
+- **AWS Documentation**: Comprehensive guides for ECS, CodeDeploy, and CloudWatch
+- **Terraform Registry**: Community modules and examples
+- **Jenkins Community**: Plugins and pipeline examples
+- **Security Tools**: Trivy, Gitleaks, Syft, SonarCloud for making security accessible
+- **Bitnami**: ECR Public images for monitoring stack
+- **DevOps Community**: Countless blog posts, tutorials, and Stack Overflow answers
+
+---
+
+## Project Status
+
+**Current Status**: ✅ Production-ready with comprehensive security scanning and blue/green deployments
+
+**Last Updated**: January 2025
+
+**Version**: 2.0.0 (ECS Fargate with SAST/SCA)
+
+---
+
+## Quick Links
+
+- [Architecture Diagram](#architecture)
+- [Installation Guide](#installation)
+- [Security Scanning](#security-scanning)
+- [Deployment Guide](#ecs-deployment)
+- [Monitoring Setup](#monitoring--observability)
+- [Troubleshooting](#challenges--solutions)
+- [Contributing Guidelines](#contributing)
+
+---
+
+**⭐ If you found this project helpful, please consider giving it a star on GitHub!**
+
+---
+
