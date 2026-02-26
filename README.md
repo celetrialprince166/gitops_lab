@@ -1060,7 +1060,7 @@ deployment_config_name = "CodeDeployDefault.ECSLinear10PercentEvery1Minutes"
 - Identical configuration to blue
 - Used only during deployments
 
-![ALB Target Group Resource Map](images/awsco_alb_res_map.png)
+![ALB Target Group Resource Map](images/aswcon_res_map_bg.png)
 
 ### Listener Configuration
 
